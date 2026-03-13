@@ -177,6 +177,9 @@ func PerformUpdate(
 		return fmt.Errorf("download: %w", err)
 	}
 
+	if progressFn != nil {
+		fmt.Println()
+	}
 	fmt.Println("Verifying and installing...")
 	if err := installFromArchive(
 		archivePath, info.Checksum, downloadChecksum,
