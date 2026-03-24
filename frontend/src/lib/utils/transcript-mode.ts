@@ -56,8 +56,8 @@ export function filterDisplayItemsByTranscriptMode(
 export function shouldAutoSwitchTranscriptModeToNormal(
   mode: "normal" | "focused",
   ordinal: number | null,
-  loadedMessages: Message[],
   visibleItems: DisplayItem[],
+  normalVisibleItems: DisplayItem[],
 ): boolean {
   if (mode !== "focused" || ordinal === null) return false;
 
@@ -66,5 +66,7 @@ export function shouldAutoSwitchTranscriptModeToNormal(
   );
   if (visible) return false;
 
-  return loadedMessages.some((msg) => msg.ordinal === ordinal);
+  return normalVisibleItems.some((item) =>
+    item.ordinals.includes(ordinal),
+  );
 }

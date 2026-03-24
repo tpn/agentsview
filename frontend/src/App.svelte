@@ -49,7 +49,7 @@
     | {
         scrollToOrdinal: (o: number) => void;
         getDisplayItems: () => DisplayItem[];
-        getTranscriptItems: () => DisplayItem[];
+        getNormalDisplayItems: () => DisplayItem[];
       }
     | undefined = $state(undefined);
 
@@ -107,8 +107,8 @@
       if (ordinal === null || loading || !messageListRef) return;
 
       const items = messageListRef.getDisplayItems();
-      const transcriptItems =
-        messageListRef.getTranscriptItems();
+      const normalItems =
+        messageListRef.getNormalDisplayItems();
       const found = items.some((item) =>
         item.ordinals.includes(ordinal),
       );
@@ -118,8 +118,8 @@
           shouldAutoSwitchTranscriptModeToNormal(
             ui.transcriptMode,
             ordinal,
-            messages.messages,
-            transcriptItems,
+            items,
+            normalItems,
           )
         ) {
           ui.setTranscriptMode("normal");

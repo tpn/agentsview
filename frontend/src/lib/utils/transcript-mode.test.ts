@@ -137,73 +137,90 @@ describe("filterDisplayItemsByTranscriptMode", () => {
 });
 
 describe("shouldAutoSwitchTranscriptModeToNormal", () => {
-  it("returns true when a loaded ordinal is hidden by focused mode", () => {
-    const messages = [
-      userMsg(0),
-      assistantMsg(1, "working"),
-      toolMsg(2),
-      userMsg(3),
-    ];
-    const items = filterDisplayItemsByTranscriptMode(
-      buildDisplayItems(messages),
-      "focused",
+  it("returns true when normal mode would reveal the hidden ordinal", () => {
+    const focusedItems = [userMsg(0), userMsg(3)].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
     );
+    const normalItems = [
+      userMsg(0),
+      assistantMsg(1, "visible in normal"),
+      userMsg(3),
+    ].map((message) => ({
+      kind: "message" as const,
+      message,
+      ordinals: [message.ordinal],
+    }));
     expect(
       shouldAutoSwitchTranscriptModeToNormal(
         "focused",
         1,
-        messages,
-        items,
+        focusedItems,
+        normalItems,
       ),
     ).toBe(true);
   });
 
   it("returns false when the ordinal is already visible", () => {
-    const messages = [userMsg(0), assistantMsg(1, "final")];
-    const items = filterDisplayItemsByTranscriptMode(
-      buildDisplayItems(messages),
-      "focused",
+    const items = [userMsg(0), assistantMsg(1, "final")].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
     );
     expect(
       shouldAutoSwitchTranscriptModeToNormal(
         "focused",
         1,
-        messages,
+        items,
         items,
       ),
     ).toBe(false);
   });
 
   it("returns false outside focused mode", () => {
-    const messages = [
-      userMsg(0),
-      assistantMsg(1, "working"),
-      toolMsg(2),
-      userMsg(3),
-    ];
-    const items = buildDisplayItems(messages);
+    const items = [userMsg(0), assistantMsg(1, "working")].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
+    );
     expect(
       shouldAutoSwitchTranscriptModeToNormal(
         "normal",
         1,
-        messages,
+        items,
         items,
       ),
     ).toBe(false);
   });
 
-  it("returns false when the target ordinal is not loaded", () => {
-    const messages = [userMsg(0), userMsg(3)];
-    const items = filterDisplayItemsByTranscriptMode(
-      buildDisplayItems(messages),
-      "focused",
+  it("returns false when normal mode would still not show the ordinal", () => {
+    const focusedItems = [userMsg(0), userMsg(3)].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
+    );
+    const normalItems = [userMsg(0), userMsg(3)].map(
+      (message) => ({
+        kind: "message" as const,
+        message,
+        ordinals: [message.ordinal],
+      }),
     );
     expect(
       shouldAutoSwitchTranscriptModeToNormal(
         "focused",
         1,
-        messages,
-        items,
+        focusedItems,
+        normalItems,
       ),
     ).toBe(false);
   });

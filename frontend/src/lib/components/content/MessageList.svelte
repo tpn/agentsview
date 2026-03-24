@@ -32,13 +32,6 @@
     buildDisplayItems(baseMessages),
   );
 
-  let transcriptItemsAsc = $derived(
-    filterDisplayItemsByTranscriptMode(
-      baseDisplayItemsAsc,
-      ui.transcriptMode,
-    ),
-  );
-
   function isItemVisible(item: DisplayItem): boolean {
     if (item.kind === "tool-group") {
       return ui.isBlockVisible("tool");
@@ -48,23 +41,33 @@
     );
   }
 
-  let displayItemsAsc = $derived.by(() => {
-    if (!ui.hasBlockFilters) return transcriptItemsAsc;
+  let normalDisplayItemsAsc = $derived.by(() => {
+    if (!ui.hasBlockFilters) return baseDisplayItemsAsc;
+    return baseDisplayItemsAsc.filter(isItemVisible);
+  });
 
-    if (ui.transcriptMode === "focused") {
+  let displayItemsAsc = $derived.by(() => {
+    if (ui.transcriptMode === "normal") {
+      return normalDisplayItemsAsc;
+    }
+
+    if (!ui.hasBlockFilters) {
       return filterDisplayItemsByTranscriptMode(
         baseDisplayItemsAsc,
         "focused",
-        {
-          isMessageVisible: (message) =>
-            hasVisibleSegments(message, (type) =>
-              ui.isBlockVisible(type),
-            ),
-        },
-      ).filter(isItemVisible);
+      );
     }
 
-    return transcriptItemsAsc.filter(isItemVisible);
+    return filterDisplayItemsByTranscriptMode(
+      baseDisplayItemsAsc,
+      "focused",
+      {
+        isMessageVisible: (message) =>
+          hasVisibleSegments(message, (type) =>
+            ui.isBlockVisible(type),
+          ),
+      },
+    ).filter(isItemVisible);
   });
 
   function itemAt(index: number) {
@@ -260,8 +263,8 @@
     return displayItemsAsc;
   }
 
-  export function getTranscriptItems(): DisplayItem[] {
-    return transcriptItemsAsc;
+  export function getNormalDisplayItems(): DisplayItem[] {
+    return normalDisplayItemsAsc;
   }
 
   let highlightQuery = $derived(
