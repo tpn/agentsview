@@ -179,24 +179,41 @@ func managedCaddyConfigPath(dataDir, mode string) string {
 	return filepath.Join(dataDir, "managed-caddy", mode, "Caddyfile")
 }
 
+func prepareManagedCaddyConfig(
+	cfg config.Config,
+	mode string,
+	backendAddr string,
+) (path string, content string, err error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return "", "", fmt.Errorf("managed caddy mode must not be empty")
+	}
+
+	path = managedCaddyConfigPath(cfg.DataDir, mode)
+	content = buildManagedCaddyfile(
+		cfg.PublicURL,
+		cfg.Proxy.BindHost,
+		backendAddr,
+		cfg.Proxy.TLSCert,
+		cfg.Proxy.TLSKey,
+		cfg.Proxy.AllowedSubnets,
+	)
+	return path, content, nil
+}
+
 func startManagedCaddy(
 	parent context.Context,
 	cfg config.Config,
 	mode string,
 ) (*managedCaddy, error) {
-	mode = strings.TrimSpace(mode)
-	if mode == "" {
-		return nil, fmt.Errorf("managed caddy mode must not be empty")
-	}
-	content := buildManagedCaddyfile(
-		cfg.PublicURL,
-		cfg.Proxy.BindHost,
+	configPath, content, err := prepareManagedCaddyConfig(
+		cfg,
+		mode,
 		net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
-		cfg.Proxy.TLSCert,
-		cfg.Proxy.TLSKey,
-		cfg.Proxy.AllowedSubnets,
 	)
-	configPath := managedCaddyConfigPath(cfg.DataDir, mode)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return nil, fmt.Errorf("creating managed caddy dir: %w", err)
 	}

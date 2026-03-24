@@ -149,6 +149,61 @@ func TestBuildManagedCaddyfileIncludesAllowlistAndTLS(t *testing.T) {
 	}
 }
 
+func TestManagedCaddyConfigPathNamespacesMode(t *testing.T) {
+	dataDir := t.TempDir()
+
+	gotServe := managedCaddyConfigPath(dataDir, "serve")
+	gotPG := managedCaddyConfigPath(dataDir, "pg-serve")
+
+	if gotServe == gotPG {
+		t.Fatal("managed caddy paths must differ by mode")
+	}
+	if !strings.HasSuffix(
+		gotServe,
+		filepath.Join("managed-caddy", "serve", "Caddyfile"),
+	) {
+		t.Fatalf("serve path = %q", gotServe)
+	}
+	if !strings.HasSuffix(
+		gotPG,
+		filepath.Join("managed-caddy", "pg-serve", "Caddyfile"),
+	) {
+		t.Fatalf("pg path = %q", gotPG)
+	}
+}
+
+func TestPrepareManagedCaddyConfigForPGServeUsesNamespacedPathAndBackend(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		DataDir:   dataDir,
+		PublicURL: "https://viewer.example.test",
+		Proxy: config.ProxyConfig{
+			BindHost:       "0.0.0.0",
+			TLSCert:        "/tmp/viewer.crt",
+			TLSKey:         "/tmp/viewer.key",
+			AllowedSubnets: []string{"10.0.0.0/16"},
+		},
+	}
+
+	path, content, err := prepareManagedCaddyConfig(
+		cfg,
+		"pg-serve",
+		"127.0.0.1:18080",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(
+		path,
+		filepath.Join("managed-caddy", "pg-serve", "Caddyfile"),
+	) {
+		t.Fatalf("path = %q", path)
+	}
+	if !strings.Contains(content, "reverse_proxy 127.0.0.1:18080") {
+		t.Fatalf("content = %s", content)
+	}
+}
+
 func TestRewriteConfiguredPublicURLPort_RewritesMatchingExplicitPort(t *testing.T) {
 	updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
 		"http://viewer.example.test:8004",

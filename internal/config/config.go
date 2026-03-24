@@ -171,6 +171,42 @@ func Load(fs *flag.FlagSet) (Config, error) {
 	return cfg, nil
 }
 
+// LoadPGServe builds a Config for `pg serve` by preserving
+// shared and PG settings from defaults/env/config file while
+// resetting serve-specific network/browser settings to defaults.
+// Only explicitly provided serve flags are applied on top.
+func LoadPGServe(fs *flag.FlagSet) (Config, error) {
+	cfg, err := Default()
+	if err != nil {
+		return cfg, err
+	}
+	cfg.loadEnv()
+	if err := cfg.loadFile(); err != nil {
+		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	if err := cfg.ensureCursorSecret(); err != nil {
+		return cfg, fmt.Errorf("ensuring cursor secret: %w", err)
+	}
+	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
+
+	// Defer serve-specific validation until after persisted serve
+	// settings are discarded and pg-serve flags are applied.
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 8080
+	cfg.PublicURL = ""
+	cfg.PublicOrigins = nil
+	cfg.Proxy = ProxyConfig{}
+	cfg.RemoteAccess = false
+	cfg.NoBrowser = false
+	cfg.HostExplicit = false
+
+	applyFlags(&cfg, fs)
+	if err := finalize(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 // LoadMinimal builds a Config from defaults, env, and config file,
 // without parsing CLI flags. Use this for subcommands that manage
 // their own flag sets.

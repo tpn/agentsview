@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -182,7 +182,7 @@ func loadPGServeConfig(args []string) (config.Config, string, error) {
 		return config.Config{}, "", fmt.Errorf("parsing flags: %w", err)
 	}
 
-	cfg, err := config.Load(fs)
+	cfg, err := config.LoadPGServe(fs)
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("loading config: %w", err)
 	}
@@ -193,22 +193,14 @@ func loadPGServeConfig(args []string) (config.Config, string, error) {
 }
 
 func runPGServe(args []string) {
-	fs := flag.NewFlagSet("pg serve", flag.ExitOnError)
-	host := fs.String("host", "127.0.0.1",
-		"Host to bind to")
-	port := fs.Int("port", 8080,
-		"Port to listen on")
-	basePath := fs.String("base-path", "",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)")
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-
-	appCfg, err := config.LoadMinimal()
+	appCfg, basePath, err := loadPGServeConfig(args)
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		log.Fatalf("%v", err)
 	}
 	setupLogFile(appCfg.DataDir)
+	if err := validateServeConfig(appCfg); err != nil {
+		fatal("invalid serve config: %v", err)
+	}
 
 	pgCfg, err := appCfg.ResolvePG()
 	if err != nil {
@@ -242,20 +234,22 @@ func runPGServe(args []string) {
 
 	// Enable remote access with auth when binding to a
 	// non-loopback address; keep it off for localhost.
-	appCfg.Host = *host
-	if !isLoopbackHost(*host) {
+	if !isLoopbackHost(appCfg.Host) {
 		appCfg.RemoteAccess = true
 		if err := appCfg.EnsureAuthToken(); err != nil {
 			fatal("pg serve: generating auth token: %v", err)
 		}
-		fmt.Printf("Auth token: %s\n", appCfg.AuthToken)
 	} else {
 		appCfg.RemoteAccess = false
 	}
-	appCfg.Port = server.FindAvailablePort(*host, *port)
-	if appCfg.Port != *port {
-		fmt.Printf("Port %d in use, using %d\n",
-			*port, appCfg.Port)
+
+	rtOpts := serveRuntimeOptions{
+		Mode:          "pg-serve",
+		RequestedPort: appCfg.Port,
+	}
+	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
+	if err != nil {
+		fatal("pg serve: %v", err)
 	}
 
 	opts := []server.Option{
@@ -267,45 +261,43 @@ func runPGServe(args []string) {
 		}),
 		server.WithBaseContext(ctx),
 	}
-	if *basePath != "" {
-		opts = append(opts, server.WithBasePath(*basePath))
+	if basePath != "" {
+		opts = append(opts, server.WithBasePath(basePath))
 	}
 	srv := server.New(appCfg, store, nil, opts...)
 
-	serveErrCh := make(chan error, 1)
-	go func() {
-		serveErrCh <- srv.ListenAndServe()
-	}()
-	if err := waitForLocalPort(
-		ctx, appCfg.Host, appCfg.Port,
-		5*time.Second, serveErrCh,
-	); err != nil {
-		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
-		)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		fatal("pg serve: server failed to start: %v", err)
+	rt, err := startServerWithOptionalCaddy(
+		ctx,
+		appCfg,
+		srv,
+		rtOpts,
+	)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		fatal("pg serve: %v", err)
 	}
 
-	fmt.Printf(
-		"agentsview %s (pg read-only) at http://%s:%d\n",
-		version, appCfg.Host, appCfg.Port,
-	)
-
-	select {
-	case err := <-serveErrCh:
-		if err != nil && err != http.ErrServerClosed {
-			fatal("pg serve: server error: %v", err)
-		}
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
+	if rt.Cfg.RemoteAccess && rt.Cfg.AuthToken != "" {
+		fmt.Printf("Auth token: %s\n", rt.Cfg.AuthToken)
+	}
+	if rt.PublicURL == rt.LocalURL {
+		fmt.Printf(
+			"agentsview %s (pg read-only) at %s\n",
+			version,
+			rt.LocalURL,
 		)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil &&
-			err != http.ErrServerClosed {
-			fatal("pg serve: shutdown error: %v", err)
-		}
+	} else {
+		fmt.Printf(
+			"agentsview %s (pg read-only) backend at %s, public at %s\n",
+			version,
+			rt.LocalURL,
+			rt.PublicURL,
+		)
+	}
+
+	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
+		fatal("pg serve: %v", err)
 	}
 }
