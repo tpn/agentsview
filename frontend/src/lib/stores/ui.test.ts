@@ -5,6 +5,13 @@ import {
   vi,
   beforeEach,
 } from "vitest";
+import { tick } from "svelte";
+import {
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_KEY,
+  SIDEBAR_WIDTH_MIN,
+  SIDEBAR_WIDTH_STORAGE_MAX,
+} from "../components/layout/sidebar-width.js";
 import { ui } from "./ui.svelte.js";
 
 describe("UIStore", () => {
@@ -163,6 +170,241 @@ describe("UIStore", () => {
         // @ts-expect-error -- query string busts module cache
         const mod = await import("./ui.svelte.js?noStorage");
         expect(mod.ui.theme).toBe("light");
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
+  describe("sidebar width", () => {
+    it("defaults to the helper default when storage is empty", async () => {
+      const original = globalThis.localStorage;
+      const getItem = vi.fn(() => null);
+      const setItem = vi.fn();
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem, setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthEmpty");
+        expect(getItem.mock.calls).toContainEqual([
+          SIDEBAR_WIDTH_KEY,
+        ]);
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("reads and clamps stored widths including stored strings", async () => {
+      const original = globalThis.localStorage;
+
+      try {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: {
+            getItem: vi.fn((key: string) =>
+              key === SIDEBAR_WIDTH_KEY
+                ? String(SIDEBAR_WIDTH_MIN - 50)
+                : null,
+            ),
+            setItem: vi.fn(),
+          },
+          writable: true,
+          configurable: true,
+        });
+        // @ts-expect-error -- query string busts module cache
+        const minMod = await import("./ui.svelte.js?sidebarWidthStoredMin");
+
+        Object.defineProperty(globalThis, "localStorage", {
+          value: {
+            getItem: vi.fn((key: string) =>
+              key === SIDEBAR_WIDTH_KEY
+                ? String(SIDEBAR_WIDTH_STORAGE_MAX + 50)
+                : null,
+            ),
+            setItem: vi.fn(),
+          },
+          writable: true,
+          configurable: true,
+        });
+        // @ts-expect-error -- query string busts module cache
+        const maxMod = await import("./ui.svelte.js?sidebarWidthStoredMax");
+
+        Object.defineProperty(globalThis, "localStorage", {
+          value: {
+            getItem: vi.fn((key: string) =>
+              key === SIDEBAR_WIDTH_KEY ? "300" : null,
+            ),
+            setItem: vi.fn(),
+          },
+          writable: true,
+          configurable: true,
+        });
+        // @ts-expect-error -- query string busts module cache
+        const stringMod = await import("./ui.svelte.js?sidebarWidthStoredString");
+
+        expect(minMod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
+        expect(maxMod.ui.sidebarWidth).toBe(
+          SIDEBAR_WIDTH_STORAGE_MAX,
+        );
+        expect(stringMod.ui.sidebarWidth).toBe(300);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("persists clamped widths through setSidebarWidth", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn(() => null),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthPersist");
+        setItem.mockClear();
+
+        mod.ui.setSidebarWidth(SIDEBAR_WIDTH_MIN - 10);
+        await tick();
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
+        expect(setItem).toHaveBeenCalledTimes(1);
+        expect(setItem).toHaveBeenLastCalledWith(
+          SIDEBAR_WIDTH_KEY,
+          String(SIDEBAR_WIDTH_MIN),
+        );
+
+        setItem.mockClear();
+        mod.ui.setSidebarWidth(SIDEBAR_WIDTH_STORAGE_MAX + 10);
+        await tick();
+        expect(mod.ui.sidebarWidth).toBe(
+          SIDEBAR_WIDTH_STORAGE_MAX,
+        );
+        expect(setItem).toHaveBeenCalledTimes(1);
+        expect(setItem).toHaveBeenLastCalledWith(
+          SIDEBAR_WIDTH_KEY,
+          String(SIDEBAR_WIDTH_STORAGE_MAX),
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("survives when localStorage.getItem is unavailable", async () => {
+      const original = globalThis.localStorage;
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthNoGetItem");
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("survives when localStorage.setItem is unavailable", async () => {
+      const original = globalThis.localStorage;
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn(() => String(SIDEBAR_WIDTH_DEFAULT + 10)),
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthNoSetItem");
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 10);
+        expect(() =>
+          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 20),
+        ).not.toThrow();
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT + 20);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("survives when localStorage is null", async () => {
+      const original = globalThis.localStorage;
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: null,
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthNullStorage");
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+        expect(() =>
+          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 15),
+        ).not.toThrow();
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("survives when localStorage is undefined", async () => {
+      const original = globalThis.localStorage;
+      // @ts-expect-error -- deliberately removing localStorage
+      delete globalThis.localStorage;
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?sidebarWidthNoStorage");
+        expect(mod.ui.sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+        expect(() =>
+          mod.ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT + 25),
+        ).not.toThrow();
       } finally {
         Object.defineProperty(globalThis, "localStorage", {
           value: original,
@@ -373,19 +615,50 @@ describe("UIStore", () => {
     });
 
     it("should persist transcript mode changes", async () => {
-      ui.setTranscriptMode("focused");
-      await Promise.resolve();
-      expect(localStorage.getItem("agentsview-transcript-mode")).toBe(
-        "focused",
-      );
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      const getItem = vi.fn(() => null);
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem, setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?persistTranscriptMode");
+        setItem.mockClear();
+        mod.ui.setTranscriptMode("focused");
+        await Promise.resolve();
+        expect(setItem).toHaveBeenLastCalledWith(
+          "agentsview-transcript-mode",
+          "focused",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
     });
 
     it("should fall back to normal for invalid stored transcript mode", async () => {
       const original = globalThis.localStorage;
-      localStorage.setItem(
-        "agentsview-transcript-mode",
-        "detailed",
-      );
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-transcript-mode"
+              ? "detailed"
+              : null,
+          ),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
       try {
         // @ts-expect-error -- cache bust for fresh UIStore
         const mod = await import("./ui.svelte.js?badTranscriptMode");

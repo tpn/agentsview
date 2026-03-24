@@ -1,3 +1,9 @@
+import {
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_KEY,
+  clampStoredSidebarWidth,
+} from "../components/layout/sidebar-width.js";
+
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream";
 export type TranscriptMode = "normal" | "focused";
@@ -126,6 +132,16 @@ function readStoredTranscriptMode(): TranscriptMode {
   return "normal";
 }
 
+function readStoredSidebarWidth(): number {
+  try {
+    return clampStoredSidebarWidth(
+      localStorage?.getItem(SIDEBAR_WIDTH_KEY),
+    );
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
 class UIStore {
   theme: Theme = $state(readStoredTheme() || "light");
   sortNewestFirst: boolean = $state(false);
@@ -133,6 +149,7 @@ class UIStore {
   transcriptMode: TranscriptMode = $state(
     readStoredTranscriptMode(),
   );
+  sidebarWidth: number = $state(readStoredSidebarWidth());
   activeModal: ModalType = $state(null);
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
@@ -180,6 +197,17 @@ class UIStore {
           localStorage?.setItem(
             TRANSCRIPT_MODE_KEY,
             this.transcriptMode,
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            SIDEBAR_WIDTH_KEY,
+            String(this.sidebarWidth),
           );
         } catch {
           // ignore
@@ -304,6 +332,10 @@ class UIStore {
 
   setTranscriptMode(mode: TranscriptMode) {
     this.transcriptMode = mode;
+  }
+
+  setSidebarWidth(width: number) {
+    this.sidebarWidth = clampStoredSidebarWidth(width);
   }
 
   selectOrdinal(ordinal: number) {
