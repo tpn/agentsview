@@ -1,5 +1,13 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import {
+    SIDEBAR_DESKTOP_BREAKPOINT,
+    SIDEBAR_WIDTH_DEFAULT,
+    SIDEBAR_WIDTH_MIN,
+    SIDEBAR_WIDTH_STORAGE_MAX,
+    clampSidebarWidthForLayout,
+    isDesktopSidebarLayout,
+  } from "./sidebar-width.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import type { Route } from "../../stores/router.svelte.js";
@@ -10,7 +18,50 @@
     content: Snippet;
   }
 
+  const RESIZE_HANDLE_WIDTH = 12;
+  const SIDEBAR_BORDER_WIDTH = 1;
+
   let { sidebar, content }: Props = $props();
+  let layoutElement = $state<HTMLElement | null>(null);
+  let resizeHandleElement = $state<HTMLElement | null>(null);
+  let layoutWidth = $state<number | null>(null);
+  let viewportWidth = $state(
+    typeof window === "undefined"
+      ? SIDEBAR_DESKTOP_BREAKPOINT
+      : window.innerWidth,
+  );
+  let isResizing = $state(false);
+  let dragState = $state<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  let didDragMove = $state(false);
+  let activePointerId = $state<number | null>(null);
+
+  const isDesktop = $derived(
+    isDesktopSidebarLayout(viewportWidth),
+  );
+  const currentLayoutWidth = $derived(
+    layoutWidth ?? viewportWidth,
+  );
+  const clampedLayoutWidth = $derived(
+    isDesktop
+      ? Math.max(
+          0,
+          currentLayoutWidth -
+            RESIZE_HANDLE_WIDTH -
+            SIDEBAR_BORDER_WIDTH,
+        )
+      : currentLayoutWidth,
+  );
+  const sidebarWidth = $derived(
+    isDesktop
+      ? clampSidebarWidthForLayout(
+          ui.sidebarWidth,
+          clampedLayoutWidth,
+        )
+      : SIDEBAR_WIDTH_DEFAULT,
+  );
 
   function handleBackdropClick() {
     ui.closeSidebar();
@@ -21,19 +72,227 @@
       sessions.deselectSession();
     }
     router.navigate(route);
-    // Close sidebar for full-page routes; keep open for sessions
-    // so the user can select from the list.
     if (route !== "sessions") {
       ui.closeSidebar();
     }
   }
+
+  function measureLayoutWidth(): number {
+    const measuredWidth =
+      layoutElement?.getBoundingClientRect().width ??
+      layoutElement?.clientWidth ??
+      viewportWidth;
+
+    const nextLayoutWidth =
+      measuredWidth > 0 ? measuredWidth : viewportWidth;
+
+    layoutWidth = nextLayoutWidth;
+    return nextLayoutWidth;
+  }
+
+  function updateSidebarWidth(clientX: number) {
+    if (!dragState) return;
+
+    const desiredWidth =
+      dragState.startWidth + (clientX - dragState.startX);
+    const clampedWidth = clampSidebarWidthForLayout(
+      desiredWidth,
+      Math.max(
+        0,
+        measureLayoutWidth() -
+          RESIZE_HANDLE_WIDTH -
+          SIDEBAR_BORDER_WIDTH,
+      ),
+    );
+
+    if (clampedWidth === sidebarWidth) return;
+    ui.setSidebarWidth(clampedWidth);
+  }
+
+  function isActiveDragPointer(event: PointerEvent) {
+    return (
+      activePointerId === null ||
+      event.pointerId === activePointerId
+    );
+  }
+
+  function stopResizing() {
+    if (
+      resizeHandleElement &&
+      activePointerId !== null &&
+      typeof resizeHandleElement.releasePointerCapture ===
+        "function"
+    ) {
+      try {
+        resizeHandleElement.releasePointerCapture(
+          activePointerId,
+        );
+      } catch {
+        // Ignore release failures when capture is absent.
+      }
+    }
+
+    if (typeof window !== "undefined") {
+      window.removeEventListener(
+        "pointermove",
+        handlePointerMove,
+      );
+      window.removeEventListener(
+        "pointerup",
+        handlePointerUp,
+      );
+      window.removeEventListener(
+        "pointercancel",
+        handlePointerCancel,
+      );
+    }
+
+    isResizing = false;
+    dragState = null;
+    didDragMove = false;
+    activePointerId = null;
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    if (!dragState) return;
+    if (!isActiveDragPointer(event)) return;
+
+    if (event.buttons === 0) {
+      stopResizing();
+      return;
+    }
+
+    const hasMoved =
+      didDragMove || event.clientX !== dragState.startX;
+    if (!hasMoved) return;
+
+    event.preventDefault();
+    didDragMove = true;
+    updateSidebarWidth(event.clientX);
+  }
+
+  function handlePointerUp(event: PointerEvent) {
+    if (!dragState || !isActiveDragPointer(event)) return;
+
+    if (didDragMove) {
+      updateSidebarWidth(event.clientX);
+    }
+
+    stopResizing();
+  }
+
+  function handlePointerCancel(event: PointerEvent) {
+    if (!dragState || !isActiveDragPointer(event)) return;
+    stopResizing();
+  }
+
+  function handlePointerDown(event: PointerEvent) {
+    if (!isDesktop || !ui.sidebarOpen || dragState || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    dragState = {
+      startX: event.clientX,
+      startWidth: sidebarWidth,
+    };
+    didDragMove = false;
+    activePointerId =
+      typeof event.pointerId === "number"
+        ? event.pointerId
+        : null;
+    isResizing = true;
+
+    if (
+      resizeHandleElement &&
+      activePointerId !== null &&
+      typeof resizeHandleElement.setPointerCapture ===
+        "function"
+    ) {
+      try {
+        resizeHandleElement.setPointerCapture(
+          activePointerId,
+        );
+      } catch {
+        // Ignore capture failures and keep window listeners as fallback.
+      }
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+  }
+
+  $effect(() => {
+    if (!layoutElement) return;
+    viewportWidth;
+    measureLayoutWidth();
+  });
+
+  $effect(() => {
+    if (
+      !layoutElement ||
+      typeof ResizeObserver === "undefined"
+    ) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      measureLayoutWidth();
+    });
+    observer.observe(layoutElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  });
+
+  $effect(() => {
+    return () => {
+      stopResizing();
+    };
+  });
+
+  $effect(() => {
+    if (!isDesktop && isResizing) {
+      stopResizing();
+    }
+  });
+
+  $effect(() => {
+    if (typeof document === "undefined") return;
+
+    document.body.classList.toggle(
+      "sidebar-resizing",
+      isResizing,
+    );
+
+    return () => {
+      document.body.classList.remove("sidebar-resizing");
+    };
+  });
 </script>
 
-<div class="layout">
-  {#if ui.sidebarOpen}
-    <button class="sidebar-backdrop" aria-label="Close sidebar" onclick={handleBackdropClick}></button>
+<svelte:window bind:innerWidth={viewportWidth} />
+
+<div
+  class="layout"
+  class:is-resizing={isResizing}
+  bind:this={layoutElement}
+>
+  {#if ui.isMobileViewport && ui.sidebarOpen}
+    <button
+      class="sidebar-backdrop"
+      aria-label="Close sidebar"
+      onclick={handleBackdropClick}
+    ></button>
   {/if}
-  <aside class="sidebar" class:open={ui.sidebarOpen}>
+
+  <aside
+    class="sidebar"
+    class:open={ui.sidebarOpen}
+    style:width={isDesktop ? `${sidebarWidth}px` : undefined}
+  >
     <nav class="mobile-nav">
       <button
         class="mobile-nav-btn"
@@ -80,6 +339,23 @@
     </nav>
     {@render sidebar()}
   </aside>
+
+  {#if isDesktop && ui.sidebarOpen}
+    <div
+      class="resize-handle"
+      bind:this={resizeHandleElement}
+      data-testid="sidebar-resize-handle"
+      role="separator"
+      aria-label="Resize sidebar"
+      aria-orientation="vertical"
+      aria-valuemin={SIDEBAR_WIDTH_MIN}
+      aria-valuemax={SIDEBAR_WIDTH_STORAGE_MAX}
+      aria-valuenow={sidebarWidth}
+      onpointerdown={handlePointerDown}
+      style:width={`${RESIZE_HANDLE_WIDTH}px`}
+    ></div>
+  {/if}
+
   <main class="content">
     {@render content()}
   </main>
@@ -88,7 +364,9 @@
 <style>
   .layout {
     display: flex;
-    height: calc(100vh - var(--header-height, 40px) - var(--status-bar-height, 24px));
+    height: calc(
+      100vh - var(--header-height, 40px) - var(--status-bar-height, 24px)
+    );
     overflow: hidden;
     position: relative;
   }
@@ -107,6 +385,53 @@
     display: none;
   }
 
+  .resize-handle {
+    position: relative;
+    flex-shrink: 0;
+    cursor: col-resize;
+    touch-action: none;
+    transition: background-color 120ms ease;
+  }
+
+  .resize-handle::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: var(--border-default);
+    transform: translateX(-50%);
+  }
+
+  .resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 52px;
+    border-radius: 999px;
+    background: var(--text-muted);
+    opacity: 0.6;
+    transform: translate(-50%, -50%);
+    transition: opacity 120ms ease;
+  }
+
+  .resize-handle:hover,
+  .layout.is-resizing .resize-handle {
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 10%,
+      transparent
+    );
+  }
+
+  .resize-handle:hover::after,
+  .layout.is-resizing .resize-handle::after {
+    opacity: 1;
+  }
+
   .content {
     flex: 1;
     min-width: 0;
@@ -123,6 +448,12 @@
 
   .mobile-nav {
     display: none;
+  }
+
+  :global(body.sidebar-resizing) {
+    cursor: col-resize;
+    user-select: none;
+    -webkit-user-select: none;
   }
 
   @media (max-width: 767px) {
@@ -179,7 +510,11 @@
 
     .mobile-nav-btn.active {
       color: var(--accent-blue);
-      background: color-mix(in srgb, var(--accent-blue) 8%, transparent);
+      background: color-mix(
+        in srgb,
+        var(--accent-blue) 8%,
+        transparent
+      );
     }
   }
 </style>
