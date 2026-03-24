@@ -636,9 +636,18 @@
     font-weight: 600;
   }
 
+  /* Match parent's border-radius on outer edges */
+  .pill:first-child {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  }
+
   .pill-icon {
     padding: 0 7px;
     position: relative;
+  }
+
+  .filter-wrap:last-child .pill {
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   }
 
   .pill.filter-active {
@@ -650,6 +659,7 @@
     height: 14px;
     background: var(--border-default);
     flex-shrink: 0;
+    align-self: center;
   }
 
   .filter-badge {
