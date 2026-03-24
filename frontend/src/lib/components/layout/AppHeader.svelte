@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { ui, ALL_BLOCK_TYPES, type BlockType } from "../../stores/ui.svelte.js";
+  import {
+    ui,
+    ALL_BLOCK_TYPES,
+    type BlockType,
+    type TranscriptMode,
+  } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -31,6 +36,14 @@
     code: "var(--text-muted)",
   };
 
+  const TRANSCRIPT_MODE_LABELS: Record<
+    TranscriptMode,
+    string
+  > = {
+    normal: "Normal",
+    focused: "Focused",
+  };
+
   async function handleExport() {
     if (sessions.activeSessionId) {
       try {
@@ -44,6 +57,13 @@
   const hasActiveSession = $derived(
     sessions.activeSessionId !== null,
   );
+
+  function handleTranscriptModeChange(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    ui.setTranscriptMode(
+      select.value as TranscriptMode,
+    );
+  }
 
   // Close block filter dropdown on outside click
   $effect(() => {
@@ -183,6 +203,21 @@
 
   <div class="header-right">
     {#if hasActiveSession}
+      <label class="transcript-mode-wrap">
+        <span class="transcript-mode-label">Transcript</span>
+        <select
+          class="transcript-mode-select"
+          value={ui.transcriptMode}
+          onchange={handleTranscriptModeChange}
+          title="Transcript mode"
+          aria-label="Transcript mode"
+        >
+          {#each Object.entries(TRANSCRIPT_MODE_LABELS) as [value, label]}
+            <option value={value}>{label}</option>
+          {/each}
+        </select>
+      </label>
+
       <div class="block-filter-wrap">
         <button
           class="header-btn"
@@ -475,6 +510,36 @@
     display: flex;
     align-items: center;
     gap: 2px;
+  }
+
+  .transcript-mode-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 6px;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .transcript-mode-label {
+    letter-spacing: 0.01em;
+  }
+
+  .transcript-mode-select {
+    height: 26px;
+    padding: 0 22px 0 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .transcript-mode-select:hover {
+    border-color: var(--border-strong);
   }
 
   .header-btn {

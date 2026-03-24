@@ -1,5 +1,6 @@
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream";
+export type TranscriptMode = "normal" | "focused";
 type ModalType =
   | "about"
   | "commandPalette"
@@ -26,6 +27,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 ];
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
+const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
 
 function readBlockFilters(): Set<BlockType> {
   try {
@@ -48,6 +50,10 @@ function readBlockFilters(): Set<BlockType> {
 
 const LAYOUT_KEY = "agentsview-message-layout";
 const ZOOM_KEY = "agentsview-zoom-level";
+const VALID_TRANSCRIPT_MODES: TranscriptMode[] = [
+  "normal",
+  "focused",
+];
 
 const IS_DESKTOP =
   typeof window !== "undefined" &&
@@ -104,10 +110,28 @@ function readStoredLayout(): MessageLayout {
   return "default";
 }
 
+function readStoredTranscriptMode(): TranscriptMode {
+  try {
+    const raw = localStorage?.getItem(TRANSCRIPT_MODE_KEY);
+    if (
+      raw &&
+      VALID_TRANSCRIPT_MODES.includes(raw as TranscriptMode)
+    ) {
+      return raw as TranscriptMode;
+    }
+  } catch {
+    // ignore
+  }
+  return "normal";
+}
+
 class UIStore {
   theme: Theme = $state(readStoredTheme() || "light");
   sortNewestFirst: boolean = $state(false);
   messageLayout: MessageLayout = $state(readStoredLayout());
+  transcriptMode: TranscriptMode = $state(
+    readStoredTranscriptMode(),
+  );
   activeModal: ModalType = $state(null);
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
@@ -144,6 +168,17 @@ class UIStore {
           localStorage?.setItem(
             LAYOUT_KEY,
             this.messageLayout,
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            TRANSCRIPT_MODE_KEY,
+            this.transcriptMode,
           );
         } catch {
           // ignore
@@ -264,6 +299,10 @@ class UIStore {
 
   setLayout(layout: MessageLayout) {
     this.messageLayout = layout;
+  }
+
+  setTranscriptMode(mode: TranscriptMode) {
+    this.transcriptMode = mode;
   }
 
   selectOrdinal(ordinal: number) {

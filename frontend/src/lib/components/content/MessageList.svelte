@@ -12,6 +12,7 @@
     buildDisplayItems,
     type DisplayItem,
   } from "../../utils/display-items.js";
+  import { filterDisplayItemsByTranscriptMode } from "../../utils/transcript-mode.js";
   import {
     hasVisibleSegments,
   } from "../../utils/content-parser.js";
@@ -23,29 +24,27 @@
   let scrollRaf: number | null = $state(null);
   let lastScrollRequest = 0;
 
-  let filteredMessages: Message[] = $derived.by(() => {
-    let msgs = messages.messages;
-
-    // Filter system-injected user messages
-    msgs = msgs.filter((m) => !isSystemMessage(m));
-
-    // Hide messages where all segments are filtered out
-    // (e.g. hiding "Assistant text" still shows code/tool/thinking
-    // nested inside assistant messages, but hides pure-text ones)
-    if (ui.hasBlockFilters) {
-      msgs = msgs.filter((m) =>
-        hasVisibleSegments(m, (type) => ui.isBlockVisible(type)),
-      );
-    }
-
-    return msgs;
-  });
-
-  let displayItemsAsc = $derived(
-    buildDisplayItems(filteredMessages, {
-      skipToolGrouping: !ui.isBlockVisible("tool"),
-    }),
+  let baseMessages: Message[] = $derived.by(() =>
+    messages.messages.filter((m) => !isSystemMessage(m)),
   );
+
+  let displayItemsAsc = $derived.by(() => {
+    const transcriptItems = filterDisplayItemsByTranscriptMode(
+      buildDisplayItems(baseMessages),
+      ui.transcriptMode,
+    );
+
+    if (!ui.hasBlockFilters) return transcriptItems;
+
+    return transcriptItems.filter((item) => {
+      if (item.kind === "tool-group") {
+        return ui.isBlockVisible("tool");
+      }
+      return hasVisibleSegments(item.message, (type) =>
+        ui.isBlockVisible(type),
+      );
+    });
+  });
 
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {

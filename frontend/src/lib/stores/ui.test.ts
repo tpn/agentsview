@@ -357,4 +357,46 @@ describe("UIStore", () => {
       expect(ui.messageLayout).toBe("default");
     });
   });
+
+  describe("transcriptMode", () => {
+    beforeEach(() => {
+      ui.setTranscriptMode("normal");
+    });
+
+    it("should default to normal", () => {
+      expect(ui.transcriptMode).toBe("normal");
+    });
+
+    it("should set transcript mode explicitly", () => {
+      ui.setTranscriptMode("focused");
+      expect(ui.transcriptMode).toBe("focused");
+    });
+
+    it("should persist transcript mode changes", async () => {
+      ui.setTranscriptMode("focused");
+      await Promise.resolve();
+      expect(localStorage.getItem("agentsview-transcript-mode")).toBe(
+        "focused",
+      );
+    });
+
+    it("should fall back to normal for invalid stored transcript mode", async () => {
+      const original = globalThis.localStorage;
+      localStorage.setItem(
+        "agentsview-transcript-mode",
+        "detailed",
+      );
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?badTranscriptMode");
+        expect(mod.ui.transcriptMode).toBe("normal");
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
 });

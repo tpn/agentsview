@@ -27,6 +27,7 @@
   import { settings } from "./lib/stores/settings.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
+  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
 
   let globalAuthToken: string = $state("");
 
@@ -110,6 +111,18 @@
       );
 
       if (!found) {
+        if (
+          shouldAutoSwitchTranscriptModeToNormal(
+            ui.transcriptMode,
+            ordinal,
+            messages.messages,
+            items,
+          )
+        ) {
+          ui.setTranscriptMode("normal");
+          return; // effect re-runs with normal transcript mode
+        }
+
         // Only auto-enable thinking if the ordinal is loaded
         // but filtered out *specifically* due to hidden thinking.
         // If it's outside the loaded window, don't change filters.
