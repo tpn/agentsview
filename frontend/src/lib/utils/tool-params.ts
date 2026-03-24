@@ -100,7 +100,7 @@ export function extractToolParamMeta(
       });
     const cmd = params.command ?? params.cmd;
     if (cmd) {
-      const firstLine = String(cmd).split("\n")[0];
+      const [firstLine = ""] = String(cmd).split("\n");
       meta.push({
         label: "cmd",
         value: truncate(firstLine, 80),

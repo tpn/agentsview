@@ -1,4 +1,4 @@
-type Route =
+export type Route =
   | "sessions"
   | "insights"
   | "pinned"
