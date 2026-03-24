@@ -175,14 +175,19 @@ func requireReadableFile(path string) error {
 	return f.Close()
 }
 
-func managedCaddyConfigPath(dataDir string) string {
-	return filepath.Join(dataDir, "managed-caddy", "Caddyfile")
+func managedCaddyConfigPath(dataDir, mode string) string {
+	return filepath.Join(dataDir, "managed-caddy", mode, "Caddyfile")
 }
 
 func startManagedCaddy(
 	parent context.Context,
 	cfg config.Config,
+	mode string,
 ) (*managedCaddy, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return nil, fmt.Errorf("managed caddy mode must not be empty")
+	}
 	content := buildManagedCaddyfile(
 		cfg.PublicURL,
 		cfg.Proxy.BindHost,
@@ -191,7 +196,7 @@ func startManagedCaddy(
 		cfg.Proxy.TLSKey,
 		cfg.Proxy.AllowedSubnets,
 	)
-	configPath := managedCaddyConfigPath(cfg.DataDir)
+	configPath := managedCaddyConfigPath(cfg.DataDir, mode)
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return nil, fmt.Errorf("creating managed caddy dir: %w", err)
 	}

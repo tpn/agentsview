@@ -173,6 +173,25 @@ func runPGStatus(args []string) {
 	fmt.Printf("PG messages: %d\n", status.PGMessages)
 }
 
+func loadPGServeConfig(args []string) (config.Config, string, error) {
+	fs := flag.NewFlagSet("pg serve", flag.ContinueOnError)
+	basePath := fs.String("base-path", "",
+		"URL prefix for reverse-proxy subpath (e.g. /agentsview)")
+	config.RegisterServeFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return config.Config{}, "", fmt.Errorf("parsing flags: %w", err)
+	}
+
+	cfg, err := config.Load(fs)
+	if err != nil {
+		return config.Config{}, "", fmt.Errorf("loading config: %w", err)
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		return config.Config{}, "", fmt.Errorf("creating data dir: %w", err)
+	}
+	return cfg, *basePath, nil
+}
+
 func runPGServe(args []string) {
 	fs := flag.NewFlagSet("pg serve", flag.ExitOnError)
 	host := fs.String("host", "127.0.0.1",
@@ -221,9 +240,9 @@ func runPGServe(args []string) {
 			"'agentsview pg push --full' to repopulate.", err)
 	}
 
-	appCfg.Host = *host
 	// Enable remote access with auth when binding to a
 	// non-loopback address; keep it off for localhost.
+	appCfg.Host = *host
 	if !isLoopbackHost(*host) {
 		appCfg.RemoteAccess = true
 		if err := appCfg.EnsureAuthToken(); err != nil {
