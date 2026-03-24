@@ -49,6 +49,7 @@
     | {
         scrollToOrdinal: (o: number) => void;
         getDisplayItems: () => DisplayItem[];
+        getTranscriptItems: () => DisplayItem[];
       }
     | undefined = $state(undefined);
 
@@ -106,6 +107,8 @@
       if (ordinal === null || loading || !messageListRef) return;
 
       const items = messageListRef.getDisplayItems();
+      const transcriptItems =
+        messageListRef.getTranscriptItems();
       const found = items.some((item) =>
         item.ordinals.includes(ordinal),
       );
@@ -116,7 +119,7 @@
             ui.transcriptMode,
             ordinal,
             messages.messages,
-            items,
+            transcriptItems,
           )
         ) {
           ui.setTranscriptMode("normal");

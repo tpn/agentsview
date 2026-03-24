@@ -7,6 +7,9 @@ import type { Message } from "../api/types.js";
 export function filterDisplayItemsByTranscriptMode(
   items: DisplayItem[],
   mode: "normal" | "focused",
+  options?: {
+    isMessageVisible?: (message: Message) => boolean;
+  },
 ): DisplayItem[] {
   if (mode === "normal") return items;
 
@@ -29,6 +32,13 @@ export function filterDisplayItemsByTranscriptMode(
       pendingAssistant = null;
       toolAfterPendingAssistant = false;
       filtered.push(item);
+      continue;
+    }
+
+    if (
+      options?.isMessageVisible &&
+      !options.isMessageVisible(item.message)
+    ) {
       continue;
     }
 

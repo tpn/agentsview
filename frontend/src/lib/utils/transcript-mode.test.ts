@@ -119,6 +119,21 @@ describe("filterDisplayItemsByTranscriptMode", () => {
       ]),
     ).toEqual([0, 2, 3]);
   });
+
+  it("can pick the last assistant that still has visible segments", () => {
+    const items = buildDisplayItems([
+      userMsg(0),
+      assistantMsg(1, "visible"),
+      assistantMsg(2, "hidden"),
+      userMsg(3),
+    ]);
+
+    expect(
+      filterDisplayItemsByTranscriptMode(items, "focused", {
+        isMessageVisible: (message) => message.ordinal !== 2,
+      }).flatMap((item) => item.ordinals),
+    ).toEqual([0, 1, 3]);
+  });
 });
 
 describe("shouldAutoSwitchTranscriptModeToNormal", () => {
