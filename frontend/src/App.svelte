@@ -27,6 +27,7 @@
   import { settings } from "./lib/stores/settings.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
+  import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
 
   let globalAuthToken: string = $state("");
 
@@ -48,6 +49,7 @@
     | {
         scrollToOrdinal: (o: number) => void;
         getDisplayItems: () => DisplayItem[];
+        getNormalDisplayItems: () => DisplayItem[];
       }
     | undefined = $state(undefined);
 
@@ -105,11 +107,25 @@
       if (ordinal === null || loading || !messageListRef) return;
 
       const items = messageListRef.getDisplayItems();
+      const normalItems =
+        messageListRef.getNormalDisplayItems();
       const found = items.some((item) =>
         item.ordinals.includes(ordinal),
       );
 
       if (!found) {
+        if (
+          shouldAutoSwitchTranscriptModeToNormal(
+            ui.transcriptMode,
+            ordinal,
+            items,
+            normalItems,
+          )
+        ) {
+          ui.setTranscriptMode("normal");
+          return; // effect re-runs with normal transcript mode
+        }
+
         // Only auto-enable thinking if the ordinal is loaded
         // but filtered out *specifically* due to hidden thinking.
         // If it's outside the loaded window, don't change filters.

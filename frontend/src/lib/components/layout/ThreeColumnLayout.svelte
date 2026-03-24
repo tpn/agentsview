@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import type { Route } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
 
   interface Props {
@@ -15,7 +16,7 @@
     ui.closeSidebar();
   }
 
-  function mobileNav(route: string) {
+  function mobileNav(route: Route) {
     if (route === "sessions") {
       sessions.deselectSession();
     }

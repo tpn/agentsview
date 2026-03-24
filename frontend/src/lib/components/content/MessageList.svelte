@@ -12,6 +12,7 @@
     buildDisplayItems,
     type DisplayItem,
   } from "../../utils/display-items.js";
+  import { filterDisplayItemsByTranscriptMode } from "../../utils/transcript-mode.js";
   import {
     hasVisibleSegments,
   } from "../../utils/content-parser.js";
@@ -23,29 +24,57 @@
   let scrollRaf: number | null = $state(null);
   let lastScrollRequest = 0;
 
-  let filteredMessages: Message[] = $derived.by(() => {
-    let msgs = messages.messages;
+  let baseMessages: Message[] = $derived.by(() =>
+    messages.messages.filter((m) => !isSystemMessage(m)),
+  );
 
-    // Filter system-injected user messages
-    msgs = msgs.filter((m) => !isSystemMessage(m));
+  let baseDisplayItemsAsc = $derived(
+    buildDisplayItems(baseMessages),
+  );
 
-    // Hide messages where all segments are filtered out
-    // (e.g. hiding "Assistant text" still shows code/tool/thinking
-    // nested inside assistant messages, but hides pure-text ones)
-    if (ui.hasBlockFilters) {
-      msgs = msgs.filter((m) =>
-        hasVisibleSegments(m, (type) => ui.isBlockVisible(type)),
-      );
-    }
-
-    return msgs;
-  });
-
-  let displayItemsAsc = $derived(
-    buildDisplayItems(filteredMessages, {
+  let filteredDisplayItemsAsc = $derived(
+    buildDisplayItems(baseMessages, {
       skipToolGrouping: !ui.isBlockVisible("tool"),
     }),
   );
+
+  function isItemVisible(item: DisplayItem): boolean {
+    if (item.kind === "tool-group") {
+      return true;
+    }
+    return hasVisibleSegments(item.message, (type) =>
+      ui.isBlockVisible(type),
+    );
+  }
+
+  let normalDisplayItemsAsc = $derived.by(() => {
+    if (!ui.hasBlockFilters) return baseDisplayItemsAsc;
+    return filteredDisplayItemsAsc.filter(isItemVisible);
+  });
+
+  let displayItemsAsc = $derived.by(() => {
+    if (ui.transcriptMode === "normal") {
+      return normalDisplayItemsAsc;
+    }
+
+    if (!ui.hasBlockFilters) {
+      return filterDisplayItemsByTranscriptMode(
+        baseDisplayItemsAsc,
+        "focused",
+      );
+    }
+
+    return filterDisplayItemsByTranscriptMode(
+      filteredDisplayItemsAsc,
+      "focused",
+      {
+        isMessageVisible: (message) =>
+          hasVisibleSegments(message, (type) =>
+            ui.isBlockVisible(type),
+          ),
+      },
+    ).filter(isItemVisible);
+  });
 
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {
@@ -238,6 +267,10 @@
 
   export function getDisplayItems(): DisplayItem[] {
     return displayItemsAsc;
+  }
+
+  export function getNormalDisplayItems(): DisplayItem[] {
+    return normalDisplayItemsAsc;
   }
 
   let highlightQuery = $derived(

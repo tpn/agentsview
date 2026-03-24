@@ -16,6 +16,7 @@ function msg(role: string, model: string): Message {
     model,
     context_tokens: 0,
     output_tokens: 0,
+    is_system: false,
   };
 }
 

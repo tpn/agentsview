@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildDisplayItems } from "./display-items.js";
+import { hasVisibleSegments } from "./content-parser.js";
 import type { Message } from "../api/types.js";
 
 function msg(
@@ -221,6 +222,70 @@ describe("buildDisplayItems with skipToolGrouping", () => {
     if (items[0]!.kind === "message" && items[1]!.kind === "message") {
       expect(items[0]!.message).toBe(t1);
       expect(items[1]!.message).toBe(t2);
+    }
+  });
+});
+
+describe("skipToolGrouping preserves thinking in tool-only messages", () => {
+  function thinkingToolMsg(ordinal: number) {
+    return msg({
+      ordinal,
+      content: "[Thinking]\nanalyzing...\n[/Thinking]\n[Bash]\n$ ls",
+      has_tool_use: true,
+      has_thinking: true,
+    });
+  }
+
+  function visibilityFrom(
+    visible: Set<string>,
+  ): (type: string) => boolean {
+    return (type: string) => visible.has(type);
+  }
+
+  it("thinking+tool message is grouped as tool-group by default", () => {
+    const items = buildDisplayItems([thinkingToolMsg(0)]);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("tool-group");
+  });
+
+  it("thinking+tool message becomes individual item with skipToolGrouping", () => {
+    const items = buildDisplayItems(
+      [thinkingToolMsg(0)],
+      { skipToolGrouping: true },
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("message");
+  });
+
+  it("individual thinking+tool message stays visible when tool hidden but thinking visible", () => {
+    const items = buildDisplayItems(
+      [thinkingToolMsg(0)],
+      { skipToolGrouping: true },
+    );
+    const noTool = visibilityFrom(
+      new Set(["user", "assistant", "thinking", "code"]),
+    );
+    expect(items[0]!.kind).toBe("message");
+    if (items[0]!.kind === "message") {
+      expect(
+        hasVisibleSegments(items[0]!.message, noTool),
+      ).toBe(true);
+    }
+  });
+
+  it("individual thinking+tool message hidden when both tool and thinking hidden", () => {
+    const items = buildDisplayItems(
+      [thinkingToolMsg(0)],
+      { skipToolGrouping: true },
+    );
+    const noToolNoThinking = visibilityFrom(
+      new Set(["user", "assistant", "code"]),
+    );
+    expect(items[0]!.kind).toBe("message");
+    if (items[0]!.kind === "message") {
+      expect(
+        hasVisibleSegments(items[0]!.message, noToolNoThinking),
+      ).toBe(false);
     }
   });
 });
