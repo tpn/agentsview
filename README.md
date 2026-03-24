@@ -208,12 +208,36 @@ agentsview pg serve              # default: 127.0.0.1:8080
 agentsview pg serve -port 9090   # custom port
 ```
 
+To have `pg serve` manage a Caddy TLS frontend directly:
+
+The same managed-Caddy prerequisites and backend-loopback requirement
+described earlier for normal `serve` mode also apply here.
+
+```bash
+agentsview pg serve \
+  -host 127.0.0.1 \
+  -port 18080 \
+  -public-url https://viewer.example.test \
+  -proxy caddy \
+  -proxy-bind-host 0.0.0.0 \
+  -public-port 8443 \
+  -tls-cert ~/.certs/viewer.crt \
+  -tls-key ~/.certs/viewer.key \
+  -allowed-subnet 10.0/16
+```
+
 This mode is useful for shared team viewers where multiple machines
 push to a central PG database and one or more read-only instances
 serve the UI. Uploads, file watching, and local sync are disabled.
-By default, `pg serve` binds to `127.0.0.1`. When a non-loopback
-`-host` is specified, remote access is enabled automatically and an
-auth token is generated and printed to stdout.
+For managed-Caddy mode, keep the backend `-host` on loopback and use
+`-proxy-bind-host` / `-public-port` to expose the public listener. If
+you run plain `pg serve` without `-proxy caddy`, then using a
+non-loopback `-host` enables token-authenticated remote access and
+prints the auth token on startup.
+
+The normal SQLite-backed `serve` mode and PostgreSQL-backed `pg serve`
+mode keep separate managed-Caddy state, so both can coexist on one
+host.
 
 ### Known Limitations
 
