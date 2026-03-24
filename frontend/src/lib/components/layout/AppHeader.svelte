@@ -15,9 +15,14 @@
   const modKey = isMac ? "Cmd" : "Ctrl";
 
   let showBlockFilter = $state(false);
+  let showOverflow = $state(false);
   let filterBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
   let filterDropRef: HTMLDivElement | undefined =
+    $state(undefined);
+  let overflowBtnRef: HTMLButtonElement | undefined =
+    $state(undefined);
+  let overflowDropRef: HTMLDivElement | undefined =
     $state(undefined);
 
   const BLOCK_LABELS: Record<BlockType, string> = {
@@ -36,14 +41,6 @@
     code: "var(--text-muted)",
   };
 
-  const TRANSCRIPT_MODE_LABELS: Record<
-    TranscriptMode,
-    string
-  > = {
-    normal: "Normal",
-    focused: "Focused",
-  };
-
   async function handleExport() {
     if (sessions.activeSessionId) {
       try {
@@ -58,13 +55,6 @@
     sessions.activeSessionId !== null,
   );
 
-  function handleTranscriptModeChange(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    ui.setTranscriptMode(
-      select.value as TranscriptMode,
-    );
-  }
-
   // Close block filter dropdown on outside click
   $effect(() => {
     if (!showBlockFilter) return;
@@ -76,6 +66,27 @@
       )
         return;
       showBlockFilter = false;
+    }
+    document.addEventListener("click", onClickOutside, true);
+    return () =>
+      document.removeEventListener(
+        "click",
+        onClickOutside,
+        true,
+      );
+  });
+
+  // Close overflow dropdown on outside click
+  $effect(() => {
+    if (!showOverflow) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        overflowBtnRef?.contains(target) ||
+        overflowDropRef?.contains(target)
+      )
+        return;
+      showOverflow = false;
     }
     document.addEventListener("click", onClickOutside, true);
     return () =>
@@ -203,73 +214,80 @@
 
   <div class="header-right">
     {#if hasActiveSession}
-      <label class="transcript-mode-wrap">
-        <span class="transcript-mode-label">Transcript</span>
-        <select
-          class="transcript-mode-select"
-          value={ui.transcriptMode}
-          onchange={handleTranscriptModeChange}
-          title="Transcript mode"
-          aria-label="Transcript mode"
-        >
-          {#each Object.entries(TRANSCRIPT_MODE_LABELS) as [value, label]}
-            <option value={value}>{label}</option>
-          {/each}
-        </select>
-      </label>
-
-      <div class="block-filter-wrap">
+      <!-- Transcript controls: mode pills + filter, grouped visually -->
+      <div class="transcript-strip">
         <button
-          class="header-btn"
-          class:active={ui.hasBlockFilters}
+          class="pill"
+          class:active={ui.transcriptMode === "normal"}
+          onclick={() => ui.setTranscriptMode("normal")}
+          title="Normal transcript — show all messages"
+          aria-label="Normal transcript mode"
+        >
+          <span class="pill-label">Normal</span>
+        </button>
+        <button
+          class="pill"
+          class:active={ui.transcriptMode === "focused"}
+          onclick={() => ui.setTranscriptMode("focused")}
+          title="Focused transcript — user prompts and final answers only"
+          aria-label="Focused transcript mode"
+        >
+          <span class="pill-label">Focused</span>
+        </button>
+
+        <span class="strip-divider"></span>
+
+        <button
+          class="pill pill-icon"
+          class:filter-active={ui.hasBlockFilters}
           bind:this={filterBtnRef}
           onclick={() => (showBlockFilter = !showBlockFilter)}
           title="Filter block types"
           aria-label="Filter block types"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
           </svg>
           {#if ui.hasBlockFilters}
-            <span class="block-filter-badge">{ui.hiddenBlockCount}</span>
+            <span class="filter-badge">{ui.hiddenBlockCount}</span>
           {/if}
         </button>
-
-        {#if showBlockFilter}
-          <div class="block-filter-dropdown" bind:this={filterDropRef}>
-            <div class="block-filter-title">Block Visibility</div>
-            {#each ALL_BLOCK_TYPES as bt}
-              {@const visible = ui.isBlockVisible(bt)}
-              <button
-                class="block-filter-item"
-                class:active={visible}
-                onclick={() => ui.toggleBlock(bt)}
-              >
-                <span
-                  class="block-filter-dot"
-                  style:background={visible ? BLOCK_COLORS[bt] : "var(--border-muted)"}
-                ></span>
-                <span class="block-filter-label">{BLOCK_LABELS[bt]}</span>
-                <span class="block-filter-check" class:on={visible}>
-                  {#if visible}
-                    <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                    </svg>
-                  {/if}
-                </span>
-              </button>
-            {/each}
-            {#if ui.hasBlockFilters}
-              <button
-                class="block-filter-reset"
-                onclick={() => ui.showAllBlocks()}
-              >
-                Show all
-              </button>
-            {/if}
-          </div>
-        {/if}
       </div>
+
+      {#if showBlockFilter}
+        <div class="block-filter-dropdown" bind:this={filterDropRef}>
+          <div class="block-filter-title">Block Visibility</div>
+          {#each ALL_BLOCK_TYPES as bt}
+            {@const visible = ui.isBlockVisible(bt)}
+            <button
+              class="block-filter-item"
+              class:active={visible}
+              onclick={() => ui.toggleBlock(bt)}
+            >
+              <span
+                class="block-filter-dot"
+                style:background={visible ? BLOCK_COLORS[bt] : "var(--border-muted)"}
+              ></span>
+              <span class="block-filter-label">{BLOCK_LABELS[bt]}</span>
+              <span class="block-filter-check" class:on={visible}>
+                {#if visible}
+                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                  </svg>
+                {/if}
+              </span>
+            </button>
+          {/each}
+          {#if ui.hasBlockFilters}
+            <button
+              class="block-filter-reset"
+              onclick={() => ui.showAllBlocks()}
+            >
+              Show all
+            </button>
+          {/if}
+        </div>
+      {/if}
 
       <button
         class="header-btn"
@@ -288,25 +306,23 @@
         {/if}
       </button>
 
+      <!-- Layout, export, publish: collapse into overflow at narrow widths -->
       <button
-        class="header-btn"
+        class="header-btn collapsible"
         onclick={() => ui.cycleLayout()}
         title="Cycle layout: {ui.messageLayout} (l)"
         aria-label="Cycle message layout"
       >
         {#if ui.messageLayout === "default"}
-          <!-- Default: cards/bordered -->
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M1.5 2A1.5 1.5 0 000 3.5v2A1.5 1.5 0 001.5 7h13A1.5 1.5 0 0016 5.5v-2A1.5 1.5 0 0014.5 2h-13zm0 1h13a.5.5 0 01.5.5v2a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-2a.5.5 0 01.5-.5zm0 6A1.5 1.5 0 000 10.5v2A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5v-2A1.5 1.5 0 0014.5 9h-13zm0 1h13a.5.5 0 01.5.5v2a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-2a.5.5 0 01.5-.5z"/>
           </svg>
         {:else if ui.messageLayout === "compact"}
-          <!-- Compact: terminal lines -->
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <path d="M3 4l4 4-4 4" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <line x1="9" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
           </svg>
         {:else}
-          <!-- Stream: continuous flow -->
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
             <rect x="1" y="1" width="14" height="4" rx="1" opacity="0.2"/>
             <rect x="1" y="6" width="14" height="4" rx="1" opacity="0.08"/>
@@ -316,7 +332,7 @@
       </button>
 
       <button
-        class="header-btn"
+        class="header-btn collapsible"
         onclick={handleExport}
         disabled={!sessions.activeSessionId}
         title="Export session (e)"
@@ -329,7 +345,7 @@
       </button>
 
       <button
-        class="header-btn"
+        class="header-btn collapsible"
         onclick={() => (ui.activeModal = "publish")}
         disabled={!sessions.activeSessionId}
         title="Publish to Gist (p)"
@@ -339,6 +355,63 @@
           <path d="M3.5 13h9a.5.5 0 010 1h-9a.5.5 0 010-1zm4.854-9.354a.5.5 0 00-.708 0l-3 3a.5.5 0 10.708.708L7.5 5.207V11.5a.5.5 0 001 0V5.207l2.146 2.147a.5.5 0 00.708-.708l-3-3z"/>
         </svg>
       </button>
+
+      <!-- Overflow menu (visible only at narrow widths) -->
+      <div class="overflow-wrap">
+        <button
+          class="header-btn overflow-btn"
+          bind:this={overflowBtnRef}
+          onclick={() => (showOverflow = !showOverflow)}
+          title="More actions"
+          aria-label="More actions"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M3 8a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm6.5 0a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm5 1.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/>
+          </svg>
+        </button>
+
+        {#if showOverflow}
+          <div class="overflow-dropdown" bind:this={overflowDropRef}>
+            <button
+              class="overflow-item"
+              onclick={() => { ui.cycleLayout(); showOverflow = false; }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                {#if ui.messageLayout === "default"}
+                  <path d="M1.5 2A1.5 1.5 0 000 3.5v2A1.5 1.5 0 001.5 7h13A1.5 1.5 0 0016 5.5v-2A1.5 1.5 0 0014.5 2h-13zm0 1h13a.5.5 0 01.5.5v2a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-2a.5.5 0 01.5-.5zm0 6A1.5 1.5 0 000 10.5v2A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5v-2A1.5 1.5 0 0014.5 9h-13zm0 1h13a.5.5 0 01.5.5v2a.5.5 0 01-.5.5h-13a.5.5 0 01-.5-.5v-2a.5.5 0 01.5-.5z"/>
+                {:else if ui.messageLayout === "compact"}
+                  <path d="M3 4l4 4-4 4" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="9" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                {:else}
+                  <rect x="1" y="1" width="14" height="4" rx="1" opacity="0.2"/>
+                  <rect x="1" y="6" width="14" height="4" rx="1" opacity="0.08"/>
+                  <rect x="1" y="11" width="14" height="4" rx="1" opacity="0.2"/>
+                {/if}
+              </svg>
+              <span>Layout: {ui.messageLayout}</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={() => { handleExport(); showOverflow = false; }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.406 1.342A5.53 5.53 0 018 0c2.69 0 4.923 2 5.166 4.579C14.758 4.804 16 6.137 16 7.773 16 9.569 14.502 11 12.687 11H10a.5.5 0 010-1h2.688C13.979 10 15 8.988 15 7.773c0-1.216-1.02-2.228-2.313-2.228h-.5v-.5C12.188 2.825 10.328 1 8 1a4.53 4.53 0 00-2.941 1.1c-.757.652-1.153 1.438-1.153 2.055v.448l-.445.049C2.064 4.805 1 5.952 1 7.318 1 8.785 2.23 10 3.781 10H6a.5.5 0 010 1H3.781C1.708 11 0 9.366 0 7.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
+                <path d="M7.646 4.146a.5.5 0 01.708 0l3 3a.5.5 0 01-.708.708L8.5 5.707V14.5a.5.5 0 01-1 0V5.707L5.354 7.854a.5.5 0 11-.708-.708l3-3z"/>
+              </svg>
+              <span>Export session</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={() => { ui.activeModal = "publish"; showOverflow = false; }}
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M3.5 13h9a.5.5 0 010 1h-9a.5.5 0 010-1zm4.854-9.354a.5.5 0 00-.708 0l-3 3a.5.5 0 10.708.708L7.5 5.207V11.5a.5.5 0 001 0V5.207l2.146 2.147a.5.5 0 00.708-.708l-3-3z"/>
+              </svg>
+              <span>Publish to Gist</span>
+            </button>
+          </div>
+        {/if}
+      </div>
     {/if}
 
     <button
@@ -401,17 +474,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 14px;
+    padding: 0 10px;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-default);
     flex-shrink: 0;
-    gap: 10px;
+    gap: 8px;
   }
 
   .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     min-width: 0;
   }
 
@@ -441,7 +514,7 @@
     letter-spacing: -0.01em;
   }
 
-.nav-btn {
+  .nav-btn {
     height: 26px;
     display: flex;
     align-items: center;
@@ -510,91 +583,79 @@
     display: flex;
     align-items: center;
     gap: 2px;
+    flex-shrink: 0;
   }
 
-  .transcript-mode-wrap {
+  /* ── Transcript strip: mode pills + filter ── */
+  .transcript-strip {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin-right: 6px;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-  }
-
-  .transcript-mode-label {
-    letter-spacing: 0.01em;
-  }
-
-  .transcript-mode-select {
     height: 26px;
-    padding: 0 22px 0 8px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    font-size: 11px;
-    font-weight: 500;
+    overflow: hidden;
+    margin-right: 4px;
+    flex-shrink: 0;
   }
 
-  .transcript-mode-select:hover {
-    border-color: var(--border-strong);
-  }
-
-  .header-btn {
-    width: 28px;
-    height: 28px;
+  .pill {
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--radius-sm);
+    padding: 0 9px;
+    font-size: 11px;
+    font-weight: 500;
     color: var(--text-muted);
-    font-size: 12px;
-    font-weight: 600;
-    transition: background 0.12s, color 0.12s;
+    background: transparent;
+    transition: background 0.1s, color 0.1s;
+    white-space: nowrap;
+    cursor: pointer;
+    border: none;
+    border-radius: 0;
   }
 
-  .header-btn:hover:not(:disabled) {
+  .pill:hover {
     background: var(--bg-surface-hover);
     color: var(--text-secondary);
   }
 
-  .header-btn.active {
-    color: var(--accent-purple);
+  .pill.active {
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 12%,
+      transparent
+    );
+    color: var(--accent-blue);
+    font-weight: 600;
   }
 
-  .header-btn.syncing {
-    animation: spin 1s linear infinite;
-  }
-
-  .header-divider {
-    width: 1px;
-    height: 14px;
-    background: var(--border-muted);
-    margin: 0 2px;
-    flex-shrink: 0;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  .block-filter-wrap {
+  .pill-icon {
+    padding: 0 7px;
     position: relative;
   }
 
-  .block-filter-badge {
+  .pill.filter-active {
+    color: var(--accent-purple);
+  }
+
+  .strip-divider {
+    width: 1px;
+    height: 14px;
+    background: var(--border-default);
+    flex-shrink: 0;
+  }
+
+  .filter-badge {
     position: absolute;
-    top: 1px;
-    right: 1px;
-    width: 12px;
-    height: 12px;
+    top: 0px;
+    right: 0px;
+    width: 11px;
+    height: 11px;
     border-radius: 50%;
     background: var(--accent-amber);
     color: white;
-    font-size: 8px;
+    font-size: 7px;
     font-weight: 700;
     display: flex;
     align-items: center;
@@ -603,11 +664,12 @@
     pointer-events: none;
   }
 
+  /* ── Block filter dropdown ── */
   .block-filter-dropdown {
     position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
+    top: var(--header-height, 40px);
+    right: 10px;
+    margin-top: 2px;
     width: 190px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -698,6 +760,47 @@
     color: var(--text-primary);
   }
 
+  /* ── Header icon buttons ── */
+  .header-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    transition: background 0.12s, color 0.12s;
+    flex-shrink: 0;
+  }
+
+  .header-btn:hover:not(:disabled) {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .header-btn.active {
+    color: var(--accent-purple);
+  }
+
+  .header-btn.syncing {
+    animation: spin 1s linear infinite;
+  }
+
+  .header-divider {
+    width: 1px;
+    height: 14px;
+    background: var(--border-muted);
+    margin: 0 2px;
+    flex-shrink: 0;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
   .hamburger {
     display: flex;
     width: 28px;
@@ -714,6 +817,54 @@
     color: var(--text-primary);
   }
 
+  /* ── Overflow menu (narrow viewports) ── */
+  .overflow-wrap {
+    position: relative;
+    display: none;
+  }
+
+  .overflow-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    width: 180px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    padding: 4px 0;
+    z-index: 100;
+    animation: dropdown-in 0.12s ease-out;
+    transform-origin: top right;
+  }
+
+  .overflow-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: left;
+    transition: background 0.08s;
+    white-space: nowrap;
+  }
+
+  .overflow-item:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .overflow-item svg {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  /* ── Responsive ── */
+
+  /* 1024px: Hide nav button labels + search text/kbd */
   @media (max-width: 1023px) {
     .nav-label {
       display: none;
@@ -732,6 +883,7 @@
     }
   }
 
+  /* 767px: Hide nav buttons and typeahead */
   @media (max-width: 767px) {
     .header-left .nav-btn {
       display: none;
@@ -742,11 +894,66 @@
     }
   }
 
+  /* 699px: Collapse layout/export/publish into overflow menu */
+  @media (max-width: 699px) {
+    .collapsible {
+      display: none;
+    }
+
+    .overflow-wrap {
+      display: block;
+    }
+
+    .pill-label {
+      font-size: 0;
+    }
+
+    /* Show first letter only via data attrs */
+    .pill:nth-child(1) .pill-label::after {
+      content: "N";
+      font-size: 11px;
+    }
+
+    .pill:nth-child(2) .pill-label::after {
+      content: "F";
+      font-size: 11px;
+    }
+
+    .pill {
+      padding: 0 7px;
+    }
+  }
+
+  /* 549px: Minimal mode — collapse further */
+  @media (max-width: 549px) {
+    .header-title {
+      display: none;
+    }
+
+    .search-hint {
+      padding: 0 8px;
+    }
+
+    .header {
+      padding: 0 6px;
+      gap: 4px;
+    }
+
+    .header-left {
+      gap: 6px;
+    }
+  }
+
+  /* Touch targets for coarse pointers */
   @media (pointer: coarse) {
     .header-btn,
     .nav-btn,
     .hamburger {
       min-width: 44px;
+      min-height: 44px;
+    }
+
+    .pill {
       min-height: 44px;
     }
   }
