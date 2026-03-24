@@ -237,57 +237,59 @@
 
         <span class="strip-divider"></span>
 
-        <button
-          class="pill pill-icon"
-          class:filter-active={ui.hasBlockFilters}
-          bind:this={filterBtnRef}
-          onclick={() => (showBlockFilter = !showBlockFilter)}
-          title="Filter block types"
-          aria-label="Filter block types"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
-          </svg>
-          {#if ui.hasBlockFilters}
-            <span class="filter-badge">{ui.hiddenBlockCount}</span>
-          {/if}
-        </button>
-      </div>
+        <div class="filter-wrap">
+          <button
+            class="pill pill-icon"
+            class:filter-active={ui.hasBlockFilters}
+            bind:this={filterBtnRef}
+            onclick={() => (showBlockFilter = !showBlockFilter)}
+            title="Filter block types"
+            aria-label="Filter block types"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+            </svg>
+            {#if ui.hasBlockFilters}
+              <span class="filter-badge">{ui.hiddenBlockCount}</span>
+            {/if}
+          </button>
 
-      {#if showBlockFilter}
-        <div class="block-filter-dropdown" bind:this={filterDropRef}>
-          <div class="block-filter-title">Block Visibility</div>
-          {#each ALL_BLOCK_TYPES as bt}
-            {@const visible = ui.isBlockVisible(bt)}
-            <button
-              class="block-filter-item"
-              class:active={visible}
-              onclick={() => ui.toggleBlock(bt)}
-            >
-              <span
-                class="block-filter-dot"
-                style:background={visible ? BLOCK_COLORS[bt] : "var(--border-muted)"}
-              ></span>
-              <span class="block-filter-label">{BLOCK_LABELS[bt]}</span>
-              <span class="block-filter-check" class:on={visible}>
-                {#if visible}
-                  <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
-                  </svg>
-                {/if}
-              </span>
-            </button>
-          {/each}
-          {#if ui.hasBlockFilters}
-            <button
-              class="block-filter-reset"
-              onclick={() => ui.showAllBlocks()}
-            >
-              Show all
-            </button>
+          {#if showBlockFilter}
+            <div class="block-filter-dropdown" bind:this={filterDropRef}>
+              <div class="block-filter-title">Block Visibility</div>
+              {#each ALL_BLOCK_TYPES as bt}
+                {@const visible = ui.isBlockVisible(bt)}
+                <button
+                  class="block-filter-item"
+                  class:active={visible}
+                  onclick={() => ui.toggleBlock(bt)}
+                >
+                  <span
+                    class="block-filter-dot"
+                    style:background={visible ? BLOCK_COLORS[bt] : "var(--border-muted)"}
+                  ></span>
+                  <span class="block-filter-label">{BLOCK_LABELS[bt]}</span>
+                  <span class="block-filter-check" class:on={visible}>
+                    {#if visible}
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                      </svg>
+                    {/if}
+                  </span>
+                </button>
+              {/each}
+              {#if ui.hasBlockFilters}
+                <button
+                  class="block-filter-reset"
+                  onclick={() => ui.showAllBlocks()}
+                >
+                  Show all
+                </button>
+              {/if}
+            </div>
           {/if}
         </div>
-      {/if}
+      </div>
 
       <button
         class="header-btn"
@@ -589,13 +591,17 @@
   /* ── Transcript strip: mode pills + filter ── */
   .transcript-strip {
     display: flex;
-    align-items: center;
-    height: 26px;
+    align-items: stretch;
+    min-height: 26px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
-    overflow: hidden;
     margin-right: 4px;
     flex-shrink: 0;
+  }
+
+  .filter-wrap {
+    position: relative;
+    display: flex;
   }
 
   .pill {
@@ -667,9 +673,9 @@
   /* ── Block filter dropdown ── */
   .block-filter-dropdown {
     position: absolute;
-    top: var(--header-height, 40px);
-    right: 10px;
-    margin-top: 2px;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
     width: 190px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -950,6 +956,10 @@
     .nav-btn,
     .hamburger {
       min-width: 44px;
+      min-height: 44px;
+    }
+
+    .transcript-strip {
       min-height: 44px;
     }
 
