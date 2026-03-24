@@ -32,9 +32,15 @@
     buildDisplayItems(baseMessages),
   );
 
+  let filteredDisplayItemsAsc = $derived(
+    buildDisplayItems(baseMessages, {
+      skipToolGrouping: !ui.isBlockVisible("tool"),
+    }),
+  );
+
   function isItemVisible(item: DisplayItem): boolean {
     if (item.kind === "tool-group") {
-      return ui.isBlockVisible("tool");
+      return true;
     }
     return hasVisibleSegments(item.message, (type) =>
       ui.isBlockVisible(type),
@@ -43,7 +49,7 @@
 
   let normalDisplayItemsAsc = $derived.by(() => {
     if (!ui.hasBlockFilters) return baseDisplayItemsAsc;
-    return baseDisplayItemsAsc.filter(isItemVisible);
+    return filteredDisplayItemsAsc.filter(isItemVisible);
   });
 
   let displayItemsAsc = $derived.by(() => {
@@ -59,7 +65,7 @@
     }
 
     return filterDisplayItemsByTranscriptMode(
-      baseDisplayItemsAsc,
+      filteredDisplayItemsAsc,
       "focused",
       {
         isMessageVisible: (message) =>
