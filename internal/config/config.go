@@ -189,8 +189,11 @@ func LoadPGServe(fs *flag.FlagSet) (Config, error) {
 	}
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 
-	// Defer serve-specific validation until after persisted serve
-	// settings are discarded and pg-serve flags are applied.
+	// pg serve intentionally ignores persisted normal serve/public/proxy
+	// settings so an existing SQLite-backed serve deployment cannot silently
+	// reconfigure the PG-backed server. Until a dedicated pg-serve config
+	// namespace exists, only explicit pg-serve flags should shape its
+	// network/proxy behavior.
 	cfg.Host = "127.0.0.1"
 	cfg.Port = 8080
 	cfg.PublicURL = ""

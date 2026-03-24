@@ -198,6 +198,17 @@ func runPGServe(args []string) {
 		log.Fatalf("%v", err)
 	}
 	setupLogFile(appCfg.DataDir)
+	// Enable remote access with auth when binding to a
+	// non-loopback address; keep it off for localhost.
+	if !isLoopbackHost(appCfg.Host) {
+		appCfg.RemoteAccess = true
+		if err := appCfg.EnsureAuthToken(); err != nil {
+			fatal("pg serve: generating auth token: %v", err)
+		}
+	} else {
+		appCfg.RemoteAccess = false
+	}
+
 	if err := validateServeConfig(appCfg); err != nil {
 		fatal("invalid serve config: %v", err)
 	}
@@ -230,17 +241,6 @@ func runPGServe(args []string) {
 		fatal("pg serve: schema incompatible: %v\n"+
 			"Drop and recreate the PG schema, then run "+
 			"'agentsview pg push --full' to repopulate.", err)
-	}
-
-	// Enable remote access with auth when binding to a
-	// non-loopback address; keep it off for localhost.
-	if !isLoopbackHost(appCfg.Host) {
-		appCfg.RemoteAccess = true
-		if err := appCfg.EnsureAuthToken(); err != nil {
-			fatal("pg serve: generating auth token: %v", err)
-		}
-	} else {
-		appCfg.RemoteAccess = false
 	}
 
 	rtOpts := serveRuntimeOptions{
