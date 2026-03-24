@@ -487,6 +487,11 @@ describe("SessionsStore", () => {
       expect(sessions.hasActiveFilters).toBe(false);
     });
 
+    it("should be true when machine filter is set", () => {
+      sessions.filters.machine = "host-a";
+      expect(sessions.hasActiveFilters).toBe(true);
+    });
+
     it("should be true when agent filter is set", () => {
       sessions.filters.agent = "claude";
       expect(sessions.hasActiveFilters).toBe(true);
@@ -526,6 +531,69 @@ describe("SessionsStore", () => {
 
       expect(sessions.filters.project).toBe("myproj");
       expect(sessions.hasActiveFilters).toBe(false);
+    });
+  });
+
+  describe("machine filter", () => {
+    it("should toggle one machine on and serialize it", async () => {
+      sessions.toggleMachineFilter("host-a");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.machine).toBe("host-a");
+      expect(sessions.selectedMachines).toEqual(["host-a"]);
+      expect(sessions.isMachineSelected("host-a")).toBe(true);
+      expectListSessionsCalledWith({ machine: "host-a" });
+    });
+
+    it("should allow multiple selected machines", async () => {
+      sessions.toggleMachineFilter("host-a");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalledTimes(1);
+      });
+
+      sessions.toggleMachineFilter("host-b");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalledTimes(2);
+      });
+
+      expect(sessions.filters.machine).toBe("host-a,host-b");
+      expect(sessions.selectedMachines).toEqual([
+        "host-a",
+        "host-b",
+      ]);
+      expect(sessions.isMachineSelected("host-b")).toBe(true);
+      expectListSessionsCalledWith({
+        machine: "host-a,host-b",
+      });
+    });
+
+    it("should toggle an already-selected machine off", async () => {
+      sessions.filters.machine = "host-a,host-b";
+
+      sessions.toggleMachineFilter("host-a");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.machine).toBe("host-b");
+      expect(sessions.selectedMachines).toEqual(["host-b"]);
+      expect(sessions.isMachineSelected("host-a")).toBe(false);
+      expectListSessionsCalledWith({ machine: "host-b" });
+    });
+
+    it("should clear the filter when the last machine is removed", async () => {
+      sessions.filters.machine = "host-a";
+
+      sessions.toggleMachineFilter("host-a");
+      await vi.waitFor(() => {
+        expect(api.listSessions).toHaveBeenCalled();
+      });
+
+      expect(sessions.filters.machine).toBe("");
+      expect(sessions.selectedMachines).toEqual([]);
+      expectListSessionsCalledWith({ machine: undefined });
     });
   });
 

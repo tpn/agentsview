@@ -470,6 +470,31 @@ class SessionsStore {
     this.load();
   }
 
+  toggleMachineFilter(machine: string) {
+    const current = this.filters.machine
+      ? this.filters.machine.split(",")
+      : [];
+    const idx = current.indexOf(machine);
+    if (idx >= 0) {
+      current.splice(idx, 1);
+    } else {
+      current.push(machine);
+    }
+    this.filters.machine = current.join(",");
+    this.setActiveSession(null);
+    this.load();
+  }
+
+  isMachineSelected(machine: string): boolean {
+    if (!this.filters.machine) return false;
+    return this.filters.machine.split(",").includes(machine);
+  }
+
+  get selectedMachines(): string[] {
+    if (!this.filters.machine) return [];
+    return this.filters.machine.split(",");
+  }
+
   setAgentFilter(agent: string) {
     if (this.filters.agent === agent) {
       this.filters.agent = "";

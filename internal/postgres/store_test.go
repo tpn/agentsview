@@ -107,6 +107,65 @@ func TestStoreListSessions(t *testing.T) {
 		len(page.Sessions), page.Total)
 }
 
+func TestStoreListSessions_MachineMultiSelect(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, ended_at, message_count,
+			 user_message_count)
+		VALUES
+			('store-test-002', 'machine-b',
+			 'test-project', 'codex',
+			 'hello machine b',
+			 '2026-03-12T11:00:00Z'::timestamptz,
+			 '2026-03-12T11:30:00Z'::timestamptz,
+			 2, 1),
+			('store-test-003', 'machine-c',
+			 'test-project', 'gemini',
+			 'hello machine c',
+			 '2026-03-12T12:00:00Z'::timestamptz,
+			 '2026-03-12T12:30:00Z'::timestamptz,
+			 2, 1)
+	`)
+	if err != nil {
+		t.Fatalf("inserting extra sessions: %v", err)
+	}
+
+	ctx := context.Background()
+	page, err := store.ListSessions(
+		ctx,
+		db.SessionFilter{
+			Machine: "test-machine,machine-c",
+			Limit:   10,
+		},
+	)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("total = %d, want 2", page.Total)
+	}
+	got := []string{
+		page.Sessions[0].Machine,
+		page.Sessions[1].Machine,
+	}
+	if got[0] != "test-machine" && got[1] != "test-machine" {
+		t.Fatalf("machines = %v, want test-machine included", got)
+	}
+	if got[0] != "machine-c" && got[1] != "machine-c" {
+		t.Fatalf("machines = %v, want machine-c included", got)
+	}
+}
+
 func TestStoreGetSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)

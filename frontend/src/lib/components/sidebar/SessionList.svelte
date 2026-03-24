@@ -499,17 +499,23 @@
             {#each sortedAgents as agent (agent.name)}
               {@const selected =
                 sessions.isAgentSelected(agent.name)}
-              <button
-                class="agent-select-row"
-                class:selected
-                style:--agent-color={agentColor(agent.name)}
-                onclick={() =>
-                  sessions.toggleAgentFilter(agent.name)}
-              >
-                <span
-                  class="agent-check"
-                  class:on={selected}
-                ></span>
+                <button
+                  class="agent-select-row"
+                  class:selected
+                  style:--agent-color={agentColor(agent.name)}
+                  onclick={() =>
+                    sessions.toggleAgentFilter(agent.name)}
+                >
+                  <span
+                    class="agent-check"
+                    class:on={selected}
+                  >
+                    {#if selected}
+                      <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                      </svg>
+                    {/if}
+                  </span>
                 <span
                   class="agent-dot-mini"
                   style:background={agentColor(agent.name)}
@@ -542,17 +548,24 @@
             <div class="agent-select-list">
               {#each sortedMachines as machine (machine)}
                 {@const selected =
-                  sessions.filters.machine === machine}
+                  sessions.isMachineSelected(machine)}
                 <button
                   class="agent-select-row"
                   class:selected
+                  style:--agent-color={"var(--accent-blue)"}
                   onclick={() =>
-                    sessions.setMachineFilter(machine)}
+                    sessions.toggleMachineFilter(machine)}
                 >
                   <span
                     class="agent-check"
                     class:on={selected}
-                  ></span>
+                  >
+                    {#if selected}
+                      <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z"/>
+                      </svg>
+                    {/if}
+                  </span>
                   <span class="agent-select-name">
                     {machine}
                   </span>
@@ -912,8 +925,13 @@
   }
 
   .agent-select-row.selected {
-    color: var(--agent-color);
+    color: var(--agent-color, var(--accent-blue));
     font-weight: 500;
+    background: color-mix(
+      in srgb,
+      var(--agent-color, var(--accent-blue)) 10%,
+      transparent
+    );
   }
 
   .agent-check {
@@ -923,11 +941,15 @@
     border: 1.5px solid var(--border-default);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .agent-check.on {
-    background: var(--agent-color);
-    border-color: var(--agent-color);
+    background: var(--agent-color, var(--accent-blue));
+    border-color: var(--agent-color, var(--accent-blue));
   }
 
   .agent-dot-mini {
