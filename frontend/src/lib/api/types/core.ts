@@ -44,7 +44,7 @@ export interface ProjectInfo {
 /** Matches Go ToolCall struct in internal/db/messages.go */
 export interface ToolCall {
   tool_name: string;
-  category: string;
+  category?: string;
   tool_use_id?: string;
   input_json?: string;
   skill_name?: string;
