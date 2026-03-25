@@ -254,7 +254,7 @@
   });
 
   $effect(() => {
-    if (!isDesktop && isResizing) {
+    if ((!isDesktop || !ui.sidebarOpen) && isResizing) {
       stopResizing();
     }
   });

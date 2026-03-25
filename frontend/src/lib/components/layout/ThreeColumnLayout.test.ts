@@ -205,6 +205,8 @@ afterEach(() => {
   document.body.className = "";
   document.body.innerHTML = "";
   restoreMeasuredLayoutWidth?.();
+  ui.sidebarOpen = true;
+  ui.isMobileViewport = false;
   ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
   setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT);
 });
@@ -489,6 +491,62 @@ describe("ThreeColumnLayout", () => {
     expect(document.body.classList.contains("sidebar-resizing")).toBe(
       false,
     );
+  });
+
+  it("stops an active resize when the sidebar closes mid-drag", async () => {
+    setViewportWidth(1280);
+    ui.sidebarOpen = true;
+    ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);
+
+    renderLayout();
+    await tick();
+
+    mockLayoutWidth(1280);
+
+    const layout = getLayout();
+    const handle = getHandle();
+    expect(handle).not.toBeNull();
+
+    handle!.dispatchEvent(
+      new MouseEvent("pointerdown", {
+        bubbles: true,
+        clientX: SIDEBAR_WIDTH_DEFAULT,
+      }),
+    );
+    window.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: SIDEBAR_WIDTH_DEFAULT + 60,
+        buttons: 1,
+      }),
+    );
+    await tick();
+
+    expect(layout.classList.contains("is-resizing")).toBe(true);
+    expect(document.body.classList.contains("sidebar-resizing")).toBe(
+      true,
+    );
+
+    ui.sidebarOpen = false;
+    await tick();
+
+    expect(getHandle()).toBeNull();
+    expect(layout.classList.contains("is-resizing")).toBe(false);
+    expect(document.body.classList.contains("sidebar-resizing")).toBe(
+      false,
+    );
+
+    const widthAfterClose = ui.sidebarWidth;
+    window.dispatchEvent(
+      new MouseEvent("pointermove", {
+        bubbles: true,
+        clientX: SIDEBAR_WIDTH_DEFAULT + 140,
+        buttons: 1,
+      }),
+    );
+    await tick();
+
+    expect(ui.sidebarWidth).toBe(widthAfterClose);
   });
 
   it("stops an active drag when a later pointermove reports no buttons pressed", async () => {
