@@ -212,8 +212,27 @@ afterEach(() => {
 });
 
 describe("ThreeColumnLayout", () => {
+  it("renders the resize handle at the 768px layout breakpoint", async () => {
+    const expectedWidth = getClampedSidebarWidthForLayout(
+      320,
+      768,
+    );
+
+    setViewportWidth(768);
+    ui.sidebarOpen = true;
+    ui.setSidebarWidth(320);
+
+    renderLayout();
+    await tick();
+
+    expect(getHandle()).not.toBeNull();
+    expect(getSidebar().style.width).toBe(
+      `${expectedWidth}px`,
+    );
+  });
+
   it("renders handle on desktop layouts", async () => {
-    setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT);
+    setViewportWidth(1280);
     ui.setSidebarWidth(320);
 
     renderLayout();

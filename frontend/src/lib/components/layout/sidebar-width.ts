@@ -3,7 +3,7 @@ export const SIDEBAR_WIDTH_DEFAULT = 260;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_STORAGE_MAX = 520;
 export const SIDEBAR_CONTENT_MIN = 480;
-export const SIDEBAR_DESKTOP_BREAKPOINT = 960;
+export const SIDEBAR_DESKTOP_BREAKPOINT = 768;
 
 export function clampStoredSidebarWidth(value: unknown): number {
   const numericValue =
