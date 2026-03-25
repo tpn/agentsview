@@ -61,6 +61,12 @@
     getAgentColor(session.agent),
   );
 
+  let showMachine = $derived(
+    !compact &&
+    !!session.machine &&
+    session.machine !== "local",
+  );
+
   /** Whether this session is a team member (received a <teammate-message>). */
   let isTeamSession = $derived(
     session.first_message?.includes("<teammate-message") ?? false,
@@ -325,8 +331,17 @@
       {/if}
     </button>
   {/if}
-  {#if !hideAgent && !compact}
-    <span class="agent-tag" style:color={agentColor}>{session.agent}</span>
+  {#if !compact && (!hideAgent || showMachine)}
+    <div class="side-meta">
+      {#if !hideAgent}
+        <span class="agent-tag" style:color={agentColor}>{session.agent}</span>
+      {/if}
+      {#if showMachine}
+        <span class="machine-tag" title={session.machine}>
+          {truncate(session.machine, 18)}
+        </span>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -449,9 +464,18 @@
     }
   }
 
+  .side-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+    min-width: 0;
+    flex-shrink: 0;
+    margin-left: 4px;
+  }
+
   /* Agent tag on the right side */
   .agent-tag {
-    flex-shrink: 0;
     font-size: 8px;
     font-weight: 600;
     text-transform: uppercase;
@@ -460,6 +484,17 @@
     opacity: 0.7;
     white-space: nowrap;
     max-width: 52px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .machine-tag {
+    font-size: 9px;
+    line-height: 1;
+    color: var(--text-muted);
+    opacity: 0.9;
+    white-space: nowrap;
+    max-width: 74px;
     overflow: hidden;
     text-overflow: ellipsis;
   }

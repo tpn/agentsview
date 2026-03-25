@@ -129,8 +129,21 @@ func buildPGSessionFilter(
 			"project != "+pb.add(f.ExcludeProject))
 	}
 	if f.Machine != "" {
-		filterPreds = append(filterPreds,
-			"machine = "+pb.add(f.Machine))
+		machines := strings.Split(f.Machine, ",")
+		if len(machines) == 1 {
+			filterPreds = append(filterPreds,
+				"machine = "+pb.add(machines[0]))
+		} else {
+			placeholders := make([]string, len(machines))
+			for i, m := range machines {
+				placeholders[i] = pb.add(m)
+			}
+			filterPreds = append(filterPreds,
+				"machine IN ("+
+					strings.Join(placeholders, ",")+
+					")",
+			)
+		}
 	}
 	if f.Agent != "" {
 		agents := strings.Split(f.Agent, ",")

@@ -237,6 +237,51 @@ func TestSessionFilterExcludeProject(t *testing.T) {
 	}
 }
 
+func TestSessionFilterMachineMultiSelect(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "laptop", "proj", func(s *Session) {
+		s.Machine = "laptop"
+		s.MessageCount = 5
+	})
+	insertSession(t, d, "desktop", "proj", func(s *Session) {
+		s.Machine = "desktop"
+		s.MessageCount = 5
+	})
+	insertSession(t, d, "server", "proj", func(s *Session) {
+		s.Machine = "server"
+		s.MessageCount = 5
+	})
+
+	tests := []struct {
+		name   string
+		filter SessionFilter
+		want   []string
+	}{
+		{
+			name:   "SingleMachine",
+			filter: SessionFilter{Machine: "laptop"},
+			want:   []string{"laptop"},
+		},
+		{
+			name:   "MultipleMachines",
+			filter: SessionFilter{Machine: "laptop,server"},
+			want:   []string{"laptop", "server"},
+		},
+		{
+			name:   "UnknownMachineIgnored",
+			filter: SessionFilter{Machine: "desktop,unknown"},
+			want:   []string{"desktop"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireSessions(t, d, tt.filter, tt.want)
+		})
+	}
+}
+
 func TestListSessionsExcludesRelationshipTypes(t *testing.T) {
 	d := testDB(t)
 

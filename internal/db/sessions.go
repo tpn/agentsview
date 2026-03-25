@@ -232,8 +232,23 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterArgs = append(filterArgs, f.ExcludeProject)
 	}
 	if f.Machine != "" {
-		filterPreds = append(filterPreds, "machine = ?")
-		filterArgs = append(filterArgs, f.Machine)
+		machines := strings.Split(f.Machine, ",")
+		if len(machines) == 1 {
+			filterPreds = append(filterPreds, "machine = ?")
+			filterArgs = append(filterArgs, machines[0])
+		} else {
+			placeholders := make(
+				[]string, len(machines),
+			)
+			for i, m := range machines {
+				placeholders[i] = "?"
+				filterArgs = append(filterArgs, m)
+			}
+			filterPreds = append(filterPreds,
+				"machine IN ("+
+					strings.Join(placeholders, ",")+
+					")")
+		}
 	}
 	if f.Agent != "" {
 		agents := strings.Split(f.Agent, ",")

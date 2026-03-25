@@ -568,6 +568,14 @@ describe("query serialization", () => {
         },
         expected: "/api/v1/sessions",
       },
+      {
+        name: "preserves comma-separated machine filters",
+        params: {
+          machine: "host-a,host-b,host-c",
+        },
+        expected:
+          "/api/v1/sessions?machine=host-a%2Chost-b%2Chost-c",
+      },
     ];
 
     for (const { name, params, expected } of cases) {
