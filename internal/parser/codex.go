@@ -50,6 +50,7 @@ type codexSessionBuilder struct {
 type codexPendingResult struct {
 	text      string
 	timestamp time.Time
+	ordinal   int
 }
 
 func newCodexSessionBuilder(
@@ -280,12 +281,20 @@ func (b *codexSessionBuilder) handleSubagentNotification(
 	b.pendingAgentResults[agentID] = codexPendingResult{
 		text:      text,
 		timestamp: ts,
+		ordinal:   b.ordinal,
 	}
+	b.ordinal++
 	return true
 }
 
 func (b *codexSessionBuilder) setCallResult(
 	callID, agentID, text string, ts time.Time,
+) {
+	b.setCallResultAt(callID, agentID, text, ts, -1)
+}
+
+func (b *codexSessionBuilder) setCallResultAt(
+	callID, agentID, text string, ts time.Time, ordinal int,
 ) {
 	if callID == "" {
 		return
@@ -311,8 +320,13 @@ func (b *codexSessionBuilder) setCallResult(
 		return
 	}
 
-	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:   b.ordinal,
+	if ordinal < 0 {
+		ordinal = b.ordinal
+		b.ordinal++
+	}
+
+	msg := ParsedMessage{
+		Ordinal:   ordinal,
 		Role:      RoleUser,
 		Content:   "",
 		Timestamp: ts,
@@ -322,9 +336,9 @@ func (b *codexSessionBuilder) setCallResult(
 			ContentLength: len(formatted),
 			ContentRaw:    strconv.Quote(formatted),
 		}},
-	})
-	b.callResultIndex[callID] = len(b.messages) - 1
-	b.ordinal++
+	}
+	idx := b.insertMessage(msg)
+	b.callResultIndex[callID] = idx
 }
 
 func (b *codexSessionBuilder) flushPendingAgentResults() {
@@ -335,7 +349,14 @@ func (b *codexSessionBuilder) flushPendingAgentResults() {
 	for agentID := range b.pendingAgentResults {
 		agentIDs = append(agentIDs, agentID)
 	}
-	sort.Strings(agentIDs)
+	sort.Slice(agentIDs, func(i, j int) bool {
+		pi := b.pendingAgentResults[agentIDs[i]]
+		pj := b.pendingAgentResults[agentIDs[j]]
+		if pi.ordinal == pj.ordinal {
+			return agentIDs[i] < agentIDs[j]
+		}
+		return pi.ordinal < pj.ordinal
+	})
 
 	for _, agentID := range agentIDs {
 		if b.agentResults[agentID] {
@@ -344,20 +365,42 @@ func (b *codexSessionBuilder) flushPendingAgentResults() {
 		pending := b.pendingAgentResults[agentID]
 		callID := b.agentCalls[agentID]
 		if callID != "" {
-			b.setCallResult(callID, agentID, pending.text, pending.timestamp)
+			b.setCallResultAt(
+				callID, agentID,
+				pending.text, pending.timestamp,
+				pending.ordinal,
+			)
 		} else {
-			b.messages = append(b.messages, ParsedMessage{
-				Ordinal:       b.ordinal,
+			b.insertMessage(ParsedMessage{
+				Ordinal:       pending.ordinal,
 				Role:          RoleUser,
 				Content:       pending.text,
 				Timestamp:     pending.timestamp,
 				Model:         b.currentModel,
 				ContentLength: len(pending.text),
 			})
-			b.ordinal++
 		}
 		b.agentResults[agentID] = true
 	}
+}
+
+func (b *codexSessionBuilder) insertMessage(msg ParsedMessage) int {
+	idx := len(b.messages)
+	for i, existing := range b.messages {
+		if existing.Ordinal > msg.Ordinal {
+			idx = i
+			break
+		}
+	}
+	b.messages = append(b.messages, ParsedMessage{})
+	copy(b.messages[idx+1:], b.messages[idx:])
+	b.messages[idx] = msg
+	for callID, cur := range b.callResultIndex {
+		if cur >= idx {
+			b.callResultIndex[callID] = cur + 1
+		}
+	}
+	return idx
 }
 
 func formatCodexFunctionCall(

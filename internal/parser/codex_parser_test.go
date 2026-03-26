@@ -210,6 +210,34 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, summary, DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 	})
 
+	t.Run("no-wait fallback preserves chronology before later messages", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		summary := "Exit code: `1`\n\nFull output:\n```text\nTraceback...\n```"
+		notification := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Exit code: `1`\\n\\nFull output:\\n```text\\nTraceback...\\n```\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-notify-order", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", notification, tsLateS5),
+			testjsonl.CodexMsgJSON("assistant", "continuing", "2024-01-01T10:01:06Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
+		require.Len(t, msgs[2].ToolResults, 1)
+		assert.Equal(t, "call_spawn", msgs[2].ToolResults[0].ToolUseID)
+		assert.Equal(t, summary, DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+		assert.Equal(t, RoleAssistant, msgs[3].Role)
+		assert.Equal(t, "continuing", msgs[3].Content)
+	})
+
 	t.Run("running subagent notification does not suppress later completion", func(t *testing.T) {
 		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
 		running := "<subagent_notification>\n" +
