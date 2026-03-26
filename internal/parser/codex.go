@@ -222,17 +222,14 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 			b.agentNames[agentID] = nickname
 		}
 	case "wait":
-		text := formatCodexWaitOutput(output, b.agentNames)
+		text, resolved := formatCodexWaitOutput(
+			output, b.agentNames, b.agentResults,
+		)
 		if text == "" {
 			return
 		}
-		status := output.Get("status")
-		if status.Exists() && status.IsObject() {
-			for agentID, entry := range status.Map() {
-				if codexTerminalSubagentStatus(entry) != "" {
-					b.agentResults[agentID] = true
-				}
-			}
+		for _, agentID := range resolved {
+			b.agentResults[agentID] = true
 		}
 		b.messages = append(b.messages, ParsedMessage{
 			Ordinal:   b.ordinal,
@@ -706,18 +703,20 @@ func parseCodexFunctionOutput(
 func formatCodexWaitOutput(
 	output gjson.Result,
 	agentNames map[string]string,
-) string {
+	seen map[string]bool,
+) (string, []string) {
 	status := output.Get("status")
 	if !status.Exists() || !status.IsObject() {
-		return ""
+		return "", nil
 	}
 
 	entries := status.Map()
 	if len(entries) == 0 {
-		return ""
+		return "", nil
 	}
 
 	parts := make([]string, 0, len(entries))
+	var resolved []string
 	ids := make([]string, 0, len(entries))
 	for agentID := range entries {
 		ids = append(ids, agentID)
@@ -726,10 +725,14 @@ func formatCodexWaitOutput(
 	multi := len(entries) > 1
 	for _, agentID := range ids {
 		entry := entries[agentID]
+		if seen[agentID] {
+			continue
+		}
 		text := codexTerminalSubagentStatus(entry)
 		if text == "" {
 			continue
 		}
+		resolved = append(resolved, agentID)
 		if !multi {
 			parts = append(parts, text)
 			continue
@@ -741,7 +744,7 @@ func formatCodexWaitOutput(
 		parts = append(parts, label+":\n"+text)
 	}
 
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), resolved
 }
 
 func codexWaitAgentIDs(args gjson.Result) []string {

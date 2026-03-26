@@ -267,6 +267,37 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, "Finished successfully", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
 	})
 
+	t.Run("wait output does not duplicate terminal notification result", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		completed := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-wait-dedupe", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{childID},
+			}, tsLateS5),
+			testjsonl.CodexMsgJSON("user", completed, "2024-01-01T10:01:06Z"),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait",
+				"{\"status\":{\""+childID+"\":{\"completed\":\"Finished successfully\"}}}",
+				"2024-01-01T10:01:07Z",
+			),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
+		require.Len(t, msgs[3].ToolResults, 1)
+		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
+		assert.Equal(t, "Finished successfully", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
+	})
+
 	t.Run("mixed wait status preserves later completion for running agent", func(t *testing.T) {
 		completedID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
 		runningID := "019c9c96-6ee7-77c0-ba4c-380f844289d6"
