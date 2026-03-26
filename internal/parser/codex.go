@@ -39,17 +39,21 @@ type codexSessionBuilder struct {
 	callNames    map[string]string
 	subagentMap  map[string]string
 	agentNames   map[string]string
+	agentCalls   map[string]string
+	agentResults map[string]bool
 }
 
 func newCodexSessionBuilder(
 	includeExec bool,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
-		project:     "unknown",
-		includeExec: includeExec,
-		callNames:   make(map[string]string),
-		subagentMap: make(map[string]string),
-		agentNames:  make(map[string]string),
+		project:      "unknown",
+		includeExec:  includeExec,
+		callNames:    make(map[string]string),
+		subagentMap:  make(map[string]string),
+		agentNames:   make(map[string]string),
+		agentCalls:   make(map[string]string),
+		agentResults: make(map[string]bool),
 	}
 }
 
@@ -128,6 +132,10 @@ func (b *codexSessionBuilder) handleResponseItem(
 		return
 	}
 
+	if role == "user" && b.handleSubagentNotification(content, ts) {
+		return
+	}
+
 	if role == "user" && isCodexSystemMessage(content) {
 		return
 	}
@@ -202,6 +210,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 			return
 		}
 		b.subagentMap[callID] = "codex:" + agentID
+		b.agentCalls[agentID] = callID
 		if nickname := strings.TrimSpace(output.Get("nickname").Str); nickname != "" {
 			b.agentNames[agentID] = nickname
 		}
@@ -209,6 +218,12 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		text := formatCodexWaitOutput(output, b.agentNames)
 		if text == "" {
 			return
+		}
+		status := output.Get("status")
+		if status.Exists() && status.IsObject() {
+			for agentID := range status.Map() {
+				b.agentResults[agentID] = true
+			}
 		}
 		b.messages = append(b.messages, ParsedMessage{
 			Ordinal:   b.ordinal,
@@ -224,6 +239,46 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		})
 		b.ordinal++
 	}
+}
+
+func (b *codexSessionBuilder) handleSubagentNotification(
+	content string, ts time.Time,
+) bool {
+	agentID, text := parseCodexSubagentNotification(content)
+	if agentID == "" || text == "" {
+		return false
+	}
+	if b.agentResults[agentID] {
+		return true
+	}
+	callID := b.agentCalls[agentID]
+	if callID == "" {
+		b.messages = append(b.messages, ParsedMessage{
+			Ordinal:       b.ordinal,
+			Role:          RoleUser,
+			Content:       text,
+			Timestamp:     ts,
+			Model:         b.currentModel,
+			ContentLength: len(text),
+		})
+		b.ordinal++
+		return true
+	}
+	b.agentResults[agentID] = true
+	b.messages = append(b.messages, ParsedMessage{
+		Ordinal:   b.ordinal,
+		Role:      RoleUser,
+		Content:   "",
+		Timestamp: ts,
+		Model:     b.currentModel,
+		ToolResults: []ParsedToolResult{{
+			ToolUseID:     callID,
+			ContentLength: len(text),
+			ContentRaw:    strconv.Quote(text),
+		}},
+	})
+	b.ordinal++
+	return true
 }
 
 func formatCodexFunctionCall(
@@ -675,6 +730,30 @@ func formatCodexWaitOutput(
 	}
 
 	return strings.Join(parts, "\n\n")
+}
+
+func parseCodexSubagentNotification(
+	content string,
+) (agentID, text string) {
+	if !isCodexSubagentNotification(content) {
+		return "", ""
+	}
+	body := strings.TrimSpace(content)
+	body = strings.TrimPrefix(body, "<subagent_notification>")
+	body = strings.TrimSuffix(body, "</subagent_notification>")
+	body = strings.TrimSpace(body)
+	if !gjson.Valid(body) {
+		return "", ""
+	}
+	parsed := gjson.Parse(body)
+	agentID = strings.TrimSpace(parsed.Get("agent_id").Str)
+	status := parsed.Get("status")
+	text = firstNonEmpty(
+		status.Get("completed").Str,
+		status.Get("errored").Str,
+		status.Get("running").Str,
+	)
+	return agentID, text
 }
 
 // extractCodexContent joins all text blocks from a Codex

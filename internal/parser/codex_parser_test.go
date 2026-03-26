@@ -177,6 +177,39 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, "continuing", msgs[4].Content)
 	})
 
+	t.Run("subagent notification without wait result falls back to spawn_agent output", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		summary := "Exit code: `1`\n\nFull output:\n```text\nTraceback...\n```"
+		notification := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Exit code: `1`\\n\\nFull output:\\n```text\\nTraceback...\\n```\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-notify", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", notification, tsLateS5),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 3, len(msgs))
+		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+			ToolUseID:         "call_spawn",
+			ToolName:          "spawn_agent",
+			Category:          "Task",
+			SubagentSessionID: "codex:" + childID,
+		}})
+		assert.Equal(t, RoleUser, msgs[2].Role)
+		assert.Empty(t, msgs[2].Content)
+		require.Len(t, msgs[2].ToolResults, 1)
+		assert.Equal(t, "call_spawn", msgs[2].ToolResults[0].ToolUseID)
+		assert.Equal(t, summary, DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+	})
+
 	t.Run("function call no name skipped", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("fc-2", "/tmp", "user", tsEarly),
