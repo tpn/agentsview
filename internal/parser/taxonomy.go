@@ -31,6 +31,8 @@ func NormalizeToolCategory(rawName string) string {
 		return "Bash"
 	case "apply_patch":
 		return "Edit"
+	case "spawn_agent":
+		return "Task"
 
 	// Gemini tools
 	case "read_file", "list_directory":

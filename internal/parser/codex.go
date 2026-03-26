@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,10 @@ const (
 	codexOriginatorExec   = "codex_exec"
 )
 
+var errCodexIncrementalNeedsFullParse = errors.New(
+	"codex subagent event requires full parse",
+)
+
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
@@ -31,6 +36,9 @@ type codexSessionBuilder struct {
 	ordinal      int
 	includeExec  bool
 	currentModel string
+	callNames    map[string]string
+	subagentMap  map[string]string
+	agentNames   map[string]string
 }
 
 func newCodexSessionBuilder(
@@ -39,6 +47,9 @@ func newCodexSessionBuilder(
 	return &codexSessionBuilder{
 		project:     "unknown",
 		includeExec: includeExec,
+		callNames:   make(map[string]string),
+		subagentMap: make(map[string]string),
+		agentNames:  make(map[string]string),
 	}
 }
 
@@ -98,8 +109,12 @@ func (b *codexSessionBuilder) handleSessionMeta(
 func (b *codexSessionBuilder) handleResponseItem(
 	payload gjson.Result, ts time.Time,
 ) {
-	if payload.Get("type").Str == "function_call" {
+	switch payload.Get("type").Str {
+	case "function_call":
 		b.handleFunctionCall(payload, ts)
+		return
+	case "function_call_output":
+		b.handleFunctionCallOutput(payload, ts)
 		return
 	}
 
@@ -141,6 +156,10 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	if name == "" {
 		return
 	}
+	callID := payload.Get("call_id").Str
+	if callID != "" {
+		b.callNames[callID] = name
+	}
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
@@ -154,12 +173,57 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		ContentLength: len(content),
 		Model:         b.currentModel,
 		ToolCalls: []ParsedToolCall{{
+			ToolUseID: callID,
 			ToolName:  name,
 			Category:  NormalizeToolCategory(name),
 			InputJSON: inputJSON,
 		}},
 	})
 	b.ordinal++
+}
+
+func (b *codexSessionBuilder) handleFunctionCallOutput(
+	payload gjson.Result, ts time.Time,
+) {
+	callID := payload.Get("call_id").Str
+	if callID == "" {
+		return
+	}
+
+	output, _ := parseCodexFunctionOutput(payload)
+	if !output.Exists() {
+		return
+	}
+
+	switch b.callNames[callID] {
+	case "spawn_agent":
+		agentID := strings.TrimSpace(output.Get("agent_id").Str)
+		if agentID == "" {
+			return
+		}
+		b.subagentMap[callID] = "codex:" + agentID
+		if nickname := strings.TrimSpace(output.Get("nickname").Str); nickname != "" {
+			b.agentNames[agentID] = nickname
+		}
+	case "wait":
+		text := formatCodexWaitOutput(output, b.agentNames)
+		if text == "" {
+			return
+		}
+		b.messages = append(b.messages, ParsedMessage{
+			Ordinal:   b.ordinal,
+			Role:      RoleUser,
+			Content:   "",
+			Timestamp: ts,
+			Model:     b.currentModel,
+			ToolResults: []ParsedToolResult{{
+				ToolUseID:     callID,
+				ContentLength: len(text),
+				ContentRaw:    strconv.Quote(text),
+			}},
+		})
+		b.ordinal++
+	}
 }
 
 func formatCodexFunctionCall(
@@ -175,6 +239,8 @@ func formatCodexFunctionCall(
 		return formatCodexWriteStdinCall(summary, args, rawArgs)
 	case "apply_patch":
 		return formatCodexApplyPatchCall(summary, args, rawArgs)
+	case "spawn_agent":
+		return formatCodexSpawnAgentCall(summary, args, rawArgs)
 	}
 
 	category := NormalizeToolCategory(name)
@@ -358,6 +424,33 @@ func formatCodexApplyPatchCall(
 	return header
 }
 
+func formatCodexSpawnAgentCall(
+	summary string, args gjson.Result, rawArgs string,
+) string {
+	if summary == "" {
+		summary = firstNonEmpty(
+			codexArgValue(args, "agent_type"),
+			codexArgValue(args, "subagent_type"),
+			"spawn_agent",
+		)
+	}
+
+	header := formatToolHeader("Task", summary)
+	prompt := firstNonEmpty(
+		codexArgValue(args, "description"),
+		codexArgValue(args, "message"),
+		codexArgValue(args, "prompt"),
+	)
+	if prompt != "" {
+		firstLine, _, _ := strings.Cut(prompt, "\n")
+		return header + "\n" + truncate(firstLine, 220)
+	}
+	if preview := codexArgPreview(args, rawArgs); preview != "" {
+		return header + "\n" + preview
+	}
+	return header
+}
+
 func extractPatchedFiles(patch string) []string {
 	if patch == "" {
 		return nil
@@ -515,6 +608,75 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func parseCodexFunctionOutput(
+	payload gjson.Result,
+) (gjson.Result, string) {
+	out := payload.Get("output")
+	if !out.Exists() {
+		return gjson.Result{}, ""
+	}
+
+	switch out.Type {
+	case gjson.String:
+		s := strings.TrimSpace(out.Str)
+		if s == "" {
+			return gjson.Result{}, ""
+		}
+		if gjson.Valid(s) {
+			return gjson.Parse(s), s
+		}
+		return gjson.Result{}, s
+	default:
+		raw := strings.TrimSpace(out.Raw)
+		if raw == "" {
+			return gjson.Result{}, ""
+		}
+		if gjson.Valid(raw) {
+			return gjson.Parse(raw), raw
+		}
+		return gjson.Result{}, raw
+	}
+}
+
+func formatCodexWaitOutput(
+	output gjson.Result,
+	agentNames map[string]string,
+) string {
+	status := output.Get("status")
+	if !status.Exists() || !status.IsObject() {
+		return ""
+	}
+
+	entries := status.Map()
+	if len(entries) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(entries))
+	multi := len(entries) > 1
+	for agentID, entry := range entries {
+		text := firstNonEmpty(
+			entry.Get("completed").Str,
+			entry.Get("errored").Str,
+			entry.Get("running").Str,
+		)
+		if text == "" {
+			continue
+		}
+		if !multi {
+			parts = append(parts, text)
+			continue
+		}
+		label := agentID
+		if name := strings.TrimSpace(agentNames[agentID]); name != "" {
+			label = fmt.Sprintf("%s (%s)", name, agentID)
+		}
+		parts = append(parts, label+":\n"+text)
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
 // extractCodexContent joins all text blocks from a Codex
 // response item's content array.
 func extractCodexContent(payload gjson.Result) string {
@@ -571,6 +733,8 @@ func ParseCodexSession(
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
+	annotateSubagentSessions(b.messages, b.subagentMap)
+
 	sessionID := b.sessionID
 	if sessionID == "" {
 		sessionID = strings.TrimSuffix(
@@ -619,13 +783,21 @@ func ParseCodexSessionFrom(
 ) ([]ParsedMessage, time.Time, int64, error) {
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
+	var fallbackErr error
 
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			if fallbackErr != nil {
+				return
+			}
 			// Skip session_meta — already processed in
 			// the initial full parse.
 			if gjson.Get(line, "type").Str ==
 				codexTypeSessionMeta {
+				return
+			}
+			if codexIncrementalNeedsFullParse(line) {
+				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
 			b.processLine(line)
@@ -637,6 +809,11 @@ func ParseCodexSessionFrom(
 			path, offset, err,
 		)
 	}
+	if fallbackErr != nil {
+		return nil, time.Time{}, 0, fallbackErr
+	}
+
+	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	return b.messages, b.endedAt, consumed, nil
 }
@@ -644,5 +821,38 @@ func ParseCodexSessionFrom(
 func isCodexSystemMessage(content string) bool {
 	return strings.HasPrefix(content, "# AGENTS.md") ||
 		strings.HasPrefix(content, "<environment_context>") ||
-		strings.HasPrefix(content, "<INSTRUCTIONS>")
+		strings.HasPrefix(content, "<INSTRUCTIONS>") ||
+		isCodexSubagentNotification(content)
+}
+
+func isCodexSubagentNotification(content string) bool {
+	return strings.HasPrefix(
+		strings.TrimSpace(content),
+		"<subagent_notification>",
+	)
+}
+
+func codexIncrementalNeedsFullParse(line string) bool {
+	if gjson.Get(line, "type").Str != codexTypeResponseItem {
+		return false
+	}
+
+	payload := gjson.Get(line, "payload")
+	switch payload.Get("type").Str {
+	case "function_call_output":
+		output, _ := parseCodexFunctionOutput(payload)
+		if !output.Exists() {
+			return false
+		}
+		return strings.TrimSpace(output.Get("agent_id").Str) != "" ||
+			output.Get("status").Exists()
+	default:
+		role := payload.Get("role").Str
+		if role != "user" {
+			return false
+		}
+		return isCodexSubagentNotification(
+			extractCodexContent(payload),
+		)
+	}
 }

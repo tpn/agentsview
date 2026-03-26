@@ -4,6 +4,7 @@ const SYSTEM_MSG_PREFIXES = [
   "This session is being continued",
   "[Request interrupted",
   "<task-notification>",
+  "<subagent_notification>",
   "<command-message>",
   "<command-name>",
   "<local-command-",

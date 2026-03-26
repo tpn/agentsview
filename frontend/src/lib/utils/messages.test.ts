@@ -49,6 +49,7 @@ describe("isSystemMessage", () => {
     ["continuation", "This session is being continued from a previous..."],
     ["interrupted", "[Request interrupted by user]"],
     ["task-notification", "<task-notification>done</task-notification>"],
+    ["subagent-notification", "<subagent_notification>{\"agent_id\":\"abc\"}</subagent_notification>"],
     ["command-message", "<command-message>commit</command-message>"],
     ["command-name", "<command-name>/commit</command-name>"],
     ["local-command", "<local-command-output>ok</local-command-output>"],
