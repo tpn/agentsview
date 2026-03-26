@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -171,6 +172,12 @@ func (b *codexSessionBuilder) handleFunctionCall(
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
+	if name == "wait" && callID != "" {
+		args, _ := parseCodexFunctionArgs(payload)
+		for _, agentID := range codexWaitAgentIDs(args) {
+			b.agentCalls[agentID] = callID
+		}
+	}
 
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:       b.ordinal,
@@ -221,8 +228,10 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		}
 		status := output.Get("status")
 		if status.Exists() && status.IsObject() {
-			for agentID := range status.Map() {
-				b.agentResults[agentID] = true
+			for agentID, entry := range status.Map() {
+				if codexTerminalSubagentStatus(entry) != "" {
+					b.agentResults[agentID] = true
+				}
 			}
 		}
 		b.messages = append(b.messages, ParsedMessage{
@@ -253,6 +262,7 @@ func (b *codexSessionBuilder) handleSubagentNotification(
 	}
 	callID := b.agentCalls[agentID]
 	if callID == "" {
+		b.agentResults[agentID] = true
 		b.messages = append(b.messages, ParsedMessage{
 			Ordinal:       b.ordinal,
 			Role:          RoleUser,
@@ -708,8 +718,14 @@ func formatCodexWaitOutput(
 	}
 
 	parts := make([]string, 0, len(entries))
+	ids := make([]string, 0, len(entries))
+	for agentID := range entries {
+		ids = append(ids, agentID)
+	}
+	sort.Strings(ids)
 	multi := len(entries) > 1
-	for agentID, entry := range entries {
+	for _, agentID := range ids {
+		entry := entries[agentID]
 		text := codexTerminalSubagentStatus(entry)
 		if text == "" {
 			continue
@@ -726,6 +742,26 @@ func formatCodexWaitOutput(
 	}
 
 	return strings.Join(parts, "\n\n")
+}
+
+func codexWaitAgentIDs(args gjson.Result) []string {
+	if !args.Exists() {
+		return nil
+	}
+	ids := args.Get("ids")
+	if !ids.Exists() || !ids.IsArray() {
+		return nil
+	}
+
+	var out []string
+	for _, item := range ids.Array() {
+		id := strings.TrimSpace(item.Str)
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 func parseCodexSubagentNotification(

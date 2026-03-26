@@ -240,6 +240,80 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, "Finished successfully", DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 	})
 
+	t.Run("notification after wait binds to wait call", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		completed := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-wait-bind", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{childID},
+			}, tsLateS5),
+			testjsonl.CodexMsgJSON("user", completed, "2024-01-01T10:01:06Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
+		require.Len(t, msgs[3].ToolResults, 1)
+		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
+		assert.Equal(t, "Finished successfully", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
+	})
+
+	t.Run("mixed wait status preserves later completion for running agent", func(t *testing.T) {
+		completedID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		runningID := "019c9c96-6ee7-77c0-ba4c-380f844289d6"
+		laterCompleted := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + runningID + "\",\"status\":{\"completed\":\"Second agent finished\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-mixed-wait", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run child agents", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{completedID, runningID},
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait",
+				"{\"status\":{\""+completedID+"\":{\"completed\":\"First agent finished\"},\""+runningID+"\":{\"running\":\"Still working\"}}}",
+				tsLate,
+			),
+			testjsonl.CodexMsgJSON("user", laterCompleted, tsLateS5),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
+		require.Len(t, msgs[2].ToolResults, 1)
+		assert.Equal(t, "call_wait", msgs[2].ToolResults[0].ToolUseID)
+		assert.Contains(t, DecodeContent(msgs[2].ToolResults[0].ContentRaw), "First agent finished")
+		require.Len(t, msgs[3].ToolResults, 1)
+		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
+		assert.Equal(t, "Second agent finished", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
+	})
+
+	t.Run("orphaned terminal notifications dedupe", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		completed := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-orphan", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", completed, tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", completed, tsEarlyS5),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 1, len(msgs))
+		assert.Equal(t, "Finished successfully", msgs[0].Content)
+	})
+
 	t.Run("function call no name skipped", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("fc-2", "/tmp", "user", tsEarly),
