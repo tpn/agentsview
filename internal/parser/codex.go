@@ -278,6 +278,9 @@ func (b *codexSessionBuilder) handleSubagentNotification(
 		b.agentResults[agentID] = true
 		return true
 	}
+	if _, ok := b.pendingAgentResults[agentID]; ok {
+		return true
+	}
 	b.pendingAgentResults[agentID] = codexPendingResult{
 		text:      text,
 		timestamp: ts,
@@ -1057,6 +1060,8 @@ func codexIncrementalNeedsFullParse(line string) bool {
 
 	payload := gjson.Get(line, "payload")
 	switch payload.Get("type").Str {
+	case "function_call":
+		return payload.Get("name").Str == "wait"
 	case "function_call_output":
 		output, _ := parseCodexFunctionOutput(payload)
 		if !output.Exists() {

@@ -238,6 +238,35 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, "continuing", msgs[3].Content)
 	})
 
+	t.Run("duplicate pending notification preserves earliest chronology", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		summary := "Exit code: `1`\n\nFull output:\n```text\nTraceback...\n```"
+		notification := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Exit code: `1`\\n\\nFull output:\\n```text\\nTraceback...\\n```\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-notify-dupe-order", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", notification, tsLateS5),
+			testjsonl.CodexMsgJSON("assistant", "continuing", "2024-01-01T10:01:06Z"),
+			testjsonl.CodexMsgJSON("user", notification, "2024-01-01T10:01:07Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
+		require.Len(t, msgs[2].ToolResults, 1)
+		assert.Equal(t, "call_spawn", msgs[2].ToolResults[0].ToolUseID)
+		assert.Equal(t, summary, DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+		assert.Equal(t, RoleAssistant, msgs[3].Role)
+		assert.Equal(t, "continuing", msgs[3].Content)
+	})
+
 	t.Run("running subagent notification does not suppress later completion", func(t *testing.T) {
 		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
 		running := "<subagent_notification>\n" +
@@ -820,6 +849,44 @@ func TestParseCodexSessionFrom_SubagentOutputRequiresFullParse(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full parse")
+}
+
+func TestParseCodexSessionFrom_WaitCallRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+	notification := "<subagent_notification>\n" +
+		"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+		"</subagent_notification>"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("inc-wait", "/tmp", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+			"agent_type": "awaiter",
+			"message":    "run it",
+		}, tsEarlyS5),
+		testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+		testjsonl.CodexMsgJSON("user", notification, tsLateS5),
+	)
+	path := createTestFile(t, "codex-wait-inc.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+			"ids": []string{childID},
+		}, "2024-01-01T10:01:06Z"),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 4, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
