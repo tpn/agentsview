@@ -210,6 +210,36 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, summary, DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 	})
 
+	t.Run("running subagent notification does not suppress later completion", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		running := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"running\":\"Still working\"}}\n" +
+			"</subagent_notification>"
+		completed := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-running", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", running, tsLateS5),
+			testjsonl.CodexMsgJSON("user", completed, "2024-01-01T10:01:06Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 3, len(msgs))
+		assert.Equal(t, RoleUser, msgs[2].Role)
+		assert.Empty(t, msgs[2].Content)
+		require.Len(t, msgs[2].ToolResults, 1)
+		assert.Equal(t, "call_spawn", msgs[2].ToolResults[0].ToolUseID)
+		assert.Equal(t, "Finished successfully", DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+	})
+
 	t.Run("function call no name skipped", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("fc-2", "/tmp", "user", tsEarly),

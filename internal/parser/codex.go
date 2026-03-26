@@ -710,11 +710,7 @@ func formatCodexWaitOutput(
 	parts := make([]string, 0, len(entries))
 	multi := len(entries) > 1
 	for agentID, entry := range entries {
-		text := firstNonEmpty(
-			entry.Get("completed").Str,
-			entry.Get("errored").Str,
-			entry.Get("running").Str,
-		)
+		text := codexTerminalSubagentStatus(entry)
 		if text == "" {
 			continue
 		}
@@ -748,12 +744,15 @@ func parseCodexSubagentNotification(
 	parsed := gjson.Parse(body)
 	agentID = strings.TrimSpace(parsed.Get("agent_id").Str)
 	status := parsed.Get("status")
-	text = firstNonEmpty(
+	text = codexTerminalSubagentStatus(status)
+	return agentID, text
+}
+
+func codexTerminalSubagentStatus(status gjson.Result) string {
+	return firstNonEmpty(
 		status.Get("completed").Str,
 		status.Get("errored").Str,
-		status.Get("running").Str,
 	)
-	return agentID, text
 }
 
 // extractCodexContent joins all text blocks from a Codex
