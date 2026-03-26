@@ -28,33 +28,44 @@ var errCodexIncrementalNeedsFullParse = errors.New(
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
-	messages     []ParsedMessage
-	firstMessage string
-	startedAt    time.Time
-	endedAt      time.Time
-	sessionID    string
-	project      string
-	ordinal      int
-	includeExec  bool
-	currentModel string
-	callNames    map[string]string
-	subagentMap  map[string]string
-	agentNames   map[string]string
-	agentCalls   map[string]string
-	agentResults map[string]bool
+	messages            []ParsedMessage
+	firstMessage        string
+	startedAt           time.Time
+	endedAt             time.Time
+	sessionID           string
+	project             string
+	ordinal             int
+	includeExec         bool
+	currentModel        string
+	callNames           map[string]string
+	subagentMap         map[string]string
+	agentNames          map[string]string
+	agentCalls          map[string]string
+	agentResults        map[string]bool
+	pendingAgentResults map[string]codexPendingResult
+	callResults         map[string]map[string]codexPendingResult
+	callResultIndex     map[string]int
+}
+
+type codexPendingResult struct {
+	text      string
+	timestamp time.Time
 }
 
 func newCodexSessionBuilder(
 	includeExec bool,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
-		project:      "unknown",
-		includeExec:  includeExec,
-		callNames:    make(map[string]string),
-		subagentMap:  make(map[string]string),
-		agentNames:   make(map[string]string),
-		agentCalls:   make(map[string]string),
-		agentResults: make(map[string]bool),
+		project:             "unknown",
+		includeExec:         includeExec,
+		callNames:           make(map[string]string),
+		subagentMap:         make(map[string]string),
+		agentNames:          make(map[string]string),
+		agentCalls:          make(map[string]string),
+		agentResults:        make(map[string]bool),
+		pendingAgentResults: make(map[string]codexPendingResult),
+		callResults:         make(map[string]map[string]codexPendingResult),
+		callResultIndex:     make(map[string]int),
 	}
 }
 
@@ -172,11 +183,10 @@ func (b *codexSessionBuilder) handleFunctionCall(
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
+	waitAgentIDs := []string(nil)
 	if name == "wait" && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
-		for _, agentID := range codexWaitAgentIDs(args) {
-			b.agentCalls[agentID] = callID
-		}
+		waitAgentIDs = codexWaitAgentIDs(args)
 	}
 
 	b.messages = append(b.messages, ParsedMessage{
@@ -195,6 +205,17 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		}},
 	})
 	b.ordinal++
+
+	if name == "wait" && callID != "" {
+		for _, agentID := range waitAgentIDs {
+			b.agentCalls[agentID] = callID
+			if pending, ok := b.pendingAgentResults[agentID]; ok && !b.agentResults[agentID] {
+				b.setCallResult(callID, agentID, pending.text, pending.timestamp)
+				b.agentResults[agentID] = true
+				delete(b.pendingAgentResults, agentID)
+			}
+		}
+	}
 }
 
 func (b *codexSessionBuilder) handleFunctionCallOutput(
@@ -222,28 +243,21 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 			b.agentNames[agentID] = nickname
 		}
 	case "wait":
-		text, resolved := formatCodexWaitOutput(
-			output, b.agentNames, b.agentResults,
-		)
-		if text == "" {
+		status := output.Get("status")
+		if !status.Exists() || !status.IsObject() {
 			return
 		}
-		for _, agentID := range resolved {
+		for agentID, entry := range status.Map() {
+			if b.agentResults[agentID] {
+				continue
+			}
+			text := codexTerminalSubagentStatus(entry)
+			if text == "" {
+				continue
+			}
+			b.setCallResult(callID, agentID, text, ts)
 			b.agentResults[agentID] = true
 		}
-		b.messages = append(b.messages, ParsedMessage{
-			Ordinal:   b.ordinal,
-			Role:      RoleUser,
-			Content:   "",
-			Timestamp: ts,
-			Model:     b.currentModel,
-			ToolResults: []ParsedToolResult{{
-				ToolUseID:     callID,
-				ContentLength: len(text),
-				ContentRaw:    strconv.Quote(text),
-			}},
-		})
-		b.ordinal++
 	}
 }
 
@@ -258,20 +272,45 @@ func (b *codexSessionBuilder) handleSubagentNotification(
 		return true
 	}
 	callID := b.agentCalls[agentID]
-	if callID == "" {
+	if callID != "" && b.callNames[callID] == "wait" {
+		b.setCallResult(callID, agentID, text, ts)
 		b.agentResults[agentID] = true
-		b.messages = append(b.messages, ParsedMessage{
-			Ordinal:       b.ordinal,
-			Role:          RoleUser,
-			Content:       text,
-			Timestamp:     ts,
-			Model:         b.currentModel,
-			ContentLength: len(text),
-		})
-		b.ordinal++
 		return true
 	}
-	b.agentResults[agentID] = true
+	b.pendingAgentResults[agentID] = codexPendingResult{
+		text:      text,
+		timestamp: ts,
+	}
+	return true
+}
+
+func (b *codexSessionBuilder) setCallResult(
+	callID, agentID, text string, ts time.Time,
+) {
+	if callID == "" {
+		return
+	}
+	if b.callResults[callID] == nil {
+		b.callResults[callID] = make(map[string]codexPendingResult)
+	}
+	b.callResults[callID][agentID] = codexPendingResult{
+		text:      text,
+		timestamp: ts,
+	}
+
+	formatted := formatCodexCallResults(
+		b.callResults[callID], b.agentNames,
+	)
+	if idx, ok := b.callResultIndex[callID]; ok {
+		tr := &b.messages[idx].ToolResults[0]
+		tr.ContentLength = len(formatted)
+		tr.ContentRaw = strconv.Quote(formatted)
+		if ts.After(b.messages[idx].Timestamp) {
+			b.messages[idx].Timestamp = ts
+		}
+		return
+	}
+
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:   b.ordinal,
 		Role:      RoleUser,
@@ -280,12 +319,45 @@ func (b *codexSessionBuilder) handleSubagentNotification(
 		Model:     b.currentModel,
 		ToolResults: []ParsedToolResult{{
 			ToolUseID:     callID,
-			ContentLength: len(text),
-			ContentRaw:    strconv.Quote(text),
+			ContentLength: len(formatted),
+			ContentRaw:    strconv.Quote(formatted),
 		}},
 	})
+	b.callResultIndex[callID] = len(b.messages) - 1
 	b.ordinal++
-	return true
+}
+
+func (b *codexSessionBuilder) flushPendingAgentResults() {
+	if len(b.pendingAgentResults) == 0 {
+		return
+	}
+	agentIDs := make([]string, 0, len(b.pendingAgentResults))
+	for agentID := range b.pendingAgentResults {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+
+	for _, agentID := range agentIDs {
+		if b.agentResults[agentID] {
+			continue
+		}
+		pending := b.pendingAgentResults[agentID]
+		callID := b.agentCalls[agentID]
+		if callID != "" {
+			b.setCallResult(callID, agentID, pending.text, pending.timestamp)
+		} else {
+			b.messages = append(b.messages, ParsedMessage{
+				Ordinal:       b.ordinal,
+				Role:          RoleUser,
+				Content:       pending.text,
+				Timestamp:     pending.timestamp,
+				Model:         b.currentModel,
+				ContentLength: len(pending.text),
+			})
+			b.ordinal++
+		}
+		b.agentResults[agentID] = true
+	}
 }
 
 func formatCodexFunctionCall(
@@ -700,23 +772,15 @@ func parseCodexFunctionOutput(
 	}
 }
 
-func formatCodexWaitOutput(
-	output gjson.Result,
+func formatCodexCallResults(
+	entries map[string]codexPendingResult,
 	agentNames map[string]string,
-	seen map[string]bool,
-) (string, []string) {
-	status := output.Get("status")
-	if !status.Exists() || !status.IsObject() {
-		return "", nil
-	}
-
-	entries := status.Map()
+) string {
 	if len(entries) == 0 {
-		return "", nil
+		return ""
 	}
 
 	parts := make([]string, 0, len(entries))
-	var resolved []string
 	ids := make([]string, 0, len(entries))
 	for agentID := range entries {
 		ids = append(ids, agentID)
@@ -724,15 +788,7 @@ func formatCodexWaitOutput(
 	sort.Strings(ids)
 	multi := len(entries) > 1
 	for _, agentID := range ids {
-		entry := entries[agentID]
-		if seen[agentID] {
-			continue
-		}
-		text := codexTerminalSubagentStatus(entry)
-		if text == "" {
-			continue
-		}
-		resolved = append(resolved, agentID)
+		text := entries[agentID].text
 		if !multi {
 			parts = append(parts, text)
 			continue
@@ -744,7 +800,7 @@ func formatCodexWaitOutput(
 		parts = append(parts, label+":\n"+text)
 	}
 
-	return strings.Join(parts, "\n\n"), resolved
+	return strings.Join(parts, "\n\n")
 }
 
 func codexWaitAgentIDs(args gjson.Result) []string {
@@ -850,6 +906,7 @@ func ParseCodexSession(
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
+	b.flushPendingAgentResults()
 	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	sessionID := b.sessionID
@@ -930,6 +987,7 @@ func ParseCodexSessionFrom(
 		return nil, time.Time{}, 0, fallbackErr
 	}
 
+	b.flushPendingAgentResults()
 	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	return b.messages, b.endedAt, consumed, nil

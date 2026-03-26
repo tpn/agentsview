@@ -262,6 +262,38 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 
 		require.NotNil(t, sess)
 		assert.Equal(t, 4, len(msgs))
+		assertToolCalls(t, msgs[2].ToolCalls, []ParsedToolCall{{
+			ToolUseID: "call_wait",
+			ToolName:  "wait",
+			Category:  "Other",
+		}})
+		require.Len(t, msgs[3].ToolResults, 1)
+		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
+		assert.Equal(t, "Finished successfully", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
+	})
+
+	t.Run("notification before wait binds to later wait call", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		completed := "<subagent_notification>\n" +
+			"{\"agent_id\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+			"</subagent_notification>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-wait-rebind", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "awaiter",
+				"message":    "Run the compile smoke test",
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", completed, tsLateS5),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{childID},
+			}, "2024-01-01T10:01:06Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 4, len(msgs))
 		require.Len(t, msgs[3].ToolResults, 1)
 		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
 		assert.Equal(t, "Finished successfully", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
@@ -319,13 +351,12 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 
 		require.NotNil(t, sess)
-		assert.Equal(t, 4, len(msgs))
+		assert.Equal(t, 3, len(msgs))
 		require.Len(t, msgs[2].ToolResults, 1)
 		assert.Equal(t, "call_wait", msgs[2].ToolResults[0].ToolUseID)
-		assert.Contains(t, DecodeContent(msgs[2].ToolResults[0].ContentRaw), "First agent finished")
-		require.Len(t, msgs[3].ToolResults, 1)
-		assert.Equal(t, "call_wait", msgs[3].ToolResults[0].ToolUseID)
-		assert.Equal(t, "Second agent finished", DecodeContent(msgs[3].ToolResults[0].ContentRaw))
+		decoded := DecodeContent(msgs[2].ToolResults[0].ContentRaw)
+		assert.Contains(t, decoded, "First agent finished")
+		assert.Contains(t, decoded, "Second agent finished")
 	})
 
 	t.Run("orphaned terminal notifications dedupe", func(t *testing.T) {
