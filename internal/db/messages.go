@@ -34,16 +34,16 @@ const (
 // ToolCall represents a single tool invocation stored in
 // the tool_calls table.
 type ToolCall struct {
-	MessageID           int64  `json:"-"`
-	SessionID           string `json:"-"`
-	ToolName            string `json:"tool_name"`
-	Category            string `json:"category"`
-	ToolUseID           string `json:"tool_use_id,omitempty"`
-	InputJSON           string `json:"input_json,omitempty"`
-	SkillName           string `json:"skill_name,omitempty"`
-	ResultContentLength int    `json:"result_content_length,omitempty"`
-	ResultContent       string `json:"result_content,omitempty"`
-	SubagentSessionID   string `json:"subagent_session_id,omitempty"`
+	MessageID           int64             `json:"-"`
+	SessionID           string            `json:"-"`
+	ToolName            string            `json:"tool_name"`
+	Category            string            `json:"category"`
+	ToolUseID           string            `json:"tool_use_id,omitempty"`
+	InputJSON           string            `json:"input_json,omitempty"`
+	SkillName           string            `json:"skill_name,omitempty"`
+	ResultContentLength int               `json:"result_content_length,omitempty"`
+	ResultContent       string            `json:"result_content,omitempty"`
+	SubagentSessionID   string            `json:"subagent_session_id,omitempty"`
 	ResultEvents        []ToolResultEvent `json:"result_events,omitempty"`
 }
 
@@ -437,6 +437,14 @@ func (db *DB) ReplaceSessionMessages(
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old tool_calls: %w", err)
+	}
+	if _, err := tx.Exec(
+		"DELETE FROM tool_result_events WHERE session_id = ?",
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"deleting old tool_result_events: %w", err,
+		)
 	}
 
 	if _, err := tx.Exec(

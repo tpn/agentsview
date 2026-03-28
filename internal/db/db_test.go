@@ -2583,6 +2583,85 @@ func TestReplaceSessionMessagesReplacesToolCalls(t *testing.T) {
 	}
 }
 
+func TestReplaceSessionMessagesReplacesToolResultEvents(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "s1", "p")
+
+	m1 := asstMsg("s1", 0, "[Wait]")
+	m1.HasToolUse = true
+	m1.ToolCalls = []ToolCall{{
+		SessionID:           "s1",
+		ToolName:            "wait",
+		Category:            "Other",
+		ToolUseID:           "call_wait",
+		ResultContent:       "old result",
+		ResultContentLength: len("old result"),
+		ResultEvents: []ToolResultEvent{{
+			ToolUseID:     "call_wait",
+			AgentID:       "agent-1",
+			Source:        "wait_output",
+			Status:        "completed",
+			Content:       "old result",
+			ContentLength: len("old result"),
+			EventIndex:    0,
+		}},
+	}}
+	insertMessages(t, d, m1)
+
+	m2 := asstMsg("s1", 0, "[Wait]")
+	m2.HasToolUse = true
+	m2.ToolCalls = []ToolCall{{
+		SessionID:           "s1",
+		ToolName:            "wait",
+		Category:            "Other",
+		ToolUseID:           "call_wait",
+		ResultContent:       "new result",
+		ResultContentLength: len("new result"),
+		ResultEvents: []ToolResultEvent{{
+			ToolUseID:     "call_wait",
+			AgentID:       "agent-1",
+			Source:        "wait_output",
+			Status:        "completed",
+			Content:       "new result",
+			ContentLength: len("new result"),
+			EventIndex:    0,
+		}},
+	}}
+	if err := d.ReplaceSessionMessages("s1", []Message{m2}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	msgs, err := d.GetAllMessages(context.Background(), "s1")
+	requireNoError(t, err, "GetAllMessages")
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	if len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(msgs[0].ToolCalls))
+	}
+	tc := msgs[0].ToolCalls[0]
+	if tc.ResultContent != "new result" {
+		t.Fatalf("result_content = %q, want %q", tc.ResultContent, "new result")
+	}
+	if len(tc.ResultEvents) != 1 {
+		t.Fatalf("result events len = %d, want 1", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].Content != "new result" {
+		t.Fatalf("event content = %q, want %q", tc.ResultEvents[0].Content, "new result")
+	}
+
+	var count int
+	err = d.Reader().QueryRow(
+		"SELECT COUNT(*) FROM tool_result_events WHERE session_id = ?",
+		"s1",
+	).Scan(&count)
+	requireNoError(t, err, "count tool_result_events")
+	if count != 1 {
+		t.Fatalf("tool_result_events count = %d, want 1", count)
+	}
+}
+
 func TestToolCallsNoToolCalls(t *testing.T) {
 	d := testDB(t)
 

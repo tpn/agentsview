@@ -423,7 +423,11 @@ func (b *codexSessionBuilder) normalizeOrdinals() {
 func (b *codexSessionBuilder) insertMessage(msg ParsedMessage) int {
 	idx := len(b.messages)
 	for i, existing := range b.messages {
-		if existing.Ordinal > msg.Ordinal {
+		if existing.Ordinal > msg.Ordinal ||
+			(existing.Ordinal == msg.Ordinal &&
+				!msg.Timestamp.IsZero() &&
+				(existing.Timestamp.IsZero() ||
+					msg.Timestamp.Before(existing.Timestamp))) {
 			idx = i
 			break
 		}

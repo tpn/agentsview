@@ -66,6 +66,31 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 	})
 }
 
+func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
+	b := newCodexSessionBuilder(false)
+	b.messages = []ParsedMessage{{
+		Ordinal:   2,
+		Role:      RoleAssistant,
+		Content:   "later assistant message",
+		Timestamp: parseTimestamp("2024-01-01T10:01:06Z"),
+	}}
+
+	idx := b.insertMessage(ParsedMessage{
+		Ordinal:   2,
+		Role:      RoleUser,
+		Content:   "earlier orphan notification",
+		Timestamp: parseTimestamp("2024-01-01T10:01:05Z"),
+	})
+
+	assert.Equal(t, 0, idx)
+	b.normalizeOrdinals()
+	require.Len(t, b.messages, 2)
+	assert.Equal(t, "earlier orphan notification", b.messages[0].Content)
+	assert.Equal(t, "later assistant message", b.messages[1].Content)
+	assert.Equal(t, 0, b.messages[0].Ordinal)
+	assert.Equal(t, 1, b.messages[1].Ordinal)
+}
+
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
 	t.Run("function calls", func(t *testing.T) {
 		content := loadFixture(t, "codex/function_calls.jsonl")
