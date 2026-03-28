@@ -39,7 +39,6 @@ type codexSessionBuilder struct {
 	currentModel         string
 	callNames            map[string]string
 	callRefs             map[string]codexToolCallRef
-	subagentMap          map[string]string
 	agentSpawnCalls      map[string]string
 	agentWaitCalls       map[string]string
 	pendingAgentEvents   map[string][]codexPendingEvent
@@ -68,7 +67,6 @@ func newCodexSessionBuilder(
 		includeExec:          includeExec,
 		callNames:            make(map[string]string),
 		callRefs:             make(map[string]codexToolCallRef),
-		subagentMap:          make(map[string]string),
 		agentSpawnCalls:      make(map[string]string),
 		agentWaitCalls:       make(map[string]string),
 		pendingAgentEvents:   make(map[string][]codexPendingEvent),
@@ -246,7 +244,6 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		if agentID == "" {
 			return
 		}
-		b.subagentMap[callID] = "codex:" + agentID
 		b.agentSpawnCalls[agentID] = callID
 	case "wait":
 		status := output.Get("status")
@@ -1002,7 +999,6 @@ func ParseCodexSession(
 
 	b.flushPendingAgentResults()
 	b.normalizeOrdinals()
-	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	sessionID := b.sessionID
 	if sessionID == "" {
@@ -1083,7 +1079,6 @@ func ParseCodexSessionFrom(
 	}
 
 	b.flushPendingAgentResults()
-	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	return b.messages, b.endedAt, consumed, nil
 }
