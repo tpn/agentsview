@@ -515,10 +515,11 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
-	_, err = conn.Exec(`
+	legacyVersion := dataVersion - 1
+	_, err = conn.Exec(fmt.Sprintf(`
 		DROP TABLE tool_result_events;
-		PRAGMA user_version = 7;
-	`)
+		PRAGMA user_version = %d;
+	`, legacyVersion))
 	requireNoError(t, err, "drop tool_result_events")
 
 	var count int

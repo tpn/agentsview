@@ -23,7 +23,7 @@ import (
 // formatting changes). Old databases with a lower user_version
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
-const dataVersion = 8
+const dataVersion = 7
 
 //go:embed schema.sql
 var schemaSQL string
