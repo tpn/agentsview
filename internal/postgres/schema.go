@@ -72,6 +72,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_calls_dedup
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls (session_id);
+
+CREATE TABLE IF NOT EXISTS tool_result_events (
+    id                        BIGSERIAL PRIMARY KEY,
+    session_id                TEXT NOT NULL,
+    tool_call_message_ordinal INT NOT NULL,
+    call_index                INT NOT NULL DEFAULT 0,
+    tool_use_id               TEXT,
+    agent_id                  TEXT,
+    subagent_session_id       TEXT,
+    source                    TEXT NOT NULL,
+    status                    TEXT NOT NULL,
+    content                   TEXT NOT NULL,
+    content_length            INT NOT NULL DEFAULT 0,
+    timestamp                 TIMESTAMPTZ,
+    event_index               INT NOT NULL DEFAULT 0,
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_session
+    ON tool_result_events (session_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_result_events_dedup
+    ON tool_result_events (
+        session_id, tool_call_message_ordinal,
+        call_index, event_index
+    );
 `
 
 // EnsureSchema creates the schema (if needed), then runs
@@ -159,6 +186,16 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"messages table missing is_system column: %w",
+			err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT event_index FROM tool_result_events LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"tool_result_events table missing required columns: %w",
 			err,
 		)
 	}

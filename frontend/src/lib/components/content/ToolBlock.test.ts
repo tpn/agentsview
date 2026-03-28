@@ -133,6 +133,77 @@ describe("ToolBlock output section", () => {
     expect(preview).not.toBeNull();
     expect(preview!.textContent).toBe("first line");
   });
+
+  it("renders history after expanding the tool block when result_events are set", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "wait",
+      category: "Other",
+      result_content: "latest summary",
+      result_events: [
+        {
+          source: "wait_output",
+          status: "completed",
+          content: "Finished successfully",
+          content_length: 21,
+          agent_id: "agent-1",
+          event_index: 0,
+        },
+      ],
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "some input", toolCall },
+    });
+    await tick();
+
+    expect(document.querySelector(".history-header")).toBeNull();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    expect(document.querySelector(".history-header")).not.toBeNull();
+  });
+
+  it("expands event history and shows chronological event content", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "wait",
+      category: "Other",
+      result_content: "agent-a:\nFirst finished\n\nagent-b:\nSecond finished",
+      result_events: [
+        {
+          source: "wait_output",
+          status: "completed",
+          content: "First finished",
+          content_length: 14,
+          agent_id: "agent-a",
+          event_index: 0,
+        },
+        {
+          source: "subagent_notification",
+          status: "completed",
+          content: "Second finished",
+          content_length: 15,
+          agent_id: "agent-b",
+          event_index: 1,
+        },
+      ],
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "some input", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".history-header")!.click();
+    await tick();
+
+    const historyEntries = Array.from(document.querySelectorAll(".history-content"));
+    expect(historyEntries).toHaveLength(2);
+    expect(historyEntries[0].textContent).toBe("First finished");
+    expect(historyEntries[1].textContent).toBe("Second finished");
+  });
 });
 
 describe("ToolBlock fallback content", () => {

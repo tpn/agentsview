@@ -661,6 +661,14 @@ func (s *Sync) pushMessages(
 	}
 	if localCount == 0 {
 		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM tool_result_events WHERE session_id = $1`,
+			sessionID,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"deleting stale pg tool_result_events: %w", err,
+			)
+		}
+		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM tool_calls WHERE session_id = $1`,
 			sessionID,
 		); err != nil {
@@ -756,6 +764,14 @@ func (s *Sync) pushMessages(
 	}
 
 	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM tool_result_events
+		WHERE session_id = $1
+	`, sessionID); err != nil {
+		return 0, fmt.Errorf(
+			"deleting pg tool_result_events: %w", err,
+		)
+	}
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_calls
 		WHERE session_id = $1
 	`, sessionID); err != nil {
@@ -804,6 +820,11 @@ func (s *Sync) pushMessages(
 			return count, err
 		}
 		if err := bulkInsertToolCalls(
+			ctx, tx, sessionID, msgs,
+		); err != nil {
+			return count, err
+		}
+		if err := bulkInsertToolResultEvents(
 			ctx, tx, sessionID, msgs,
 		); err != nil {
 			return count, err
@@ -933,6 +954,78 @@ func bulkInsertToolCalls(
 			return fmt.Errorf(
 				"bulk inserting tool_calls: %w", err,
 			)
+		}
+	}
+	return nil
+}
+
+func bulkInsertToolResultEvents(
+	ctx context.Context, tx *sql.Tx,
+	sessionID string, msgs []db.Message,
+) error {
+	type evRow struct {
+		ordinal int
+		index   int
+		ev      db.ToolResultEvent
+	}
+	var rows []evRow
+	for _, m := range msgs {
+		for i, tc := range m.ToolCalls {
+			for _, ev := range tc.ResultEvents {
+				rows = append(rows, evRow{m.Ordinal, i, ev})
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+
+	const evBatch = 100
+	for i := 0; i < len(rows); i += evBatch {
+		end := min(i+evBatch, len(rows))
+		batch := rows[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO tool_result_events (
+			session_id, tool_call_message_ordinal, call_index,
+			tool_use_id, agent_id, subagent_session_id,
+			source, status, content, content_length,
+			timestamp, event_index) VALUES `)
+		args := make([]any, 0, len(batch)*12)
+		for j, r := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*12 + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,$%d,"+
+					"$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4, p+5,
+				p+6, p+7, p+8, p+9, p+10, p+11,
+			)
+			var ts any
+			if r.ev.Timestamp != "" {
+				if t, ok := ParseSQLiteTimestamp(r.ev.Timestamp); ok {
+					ts = t
+				}
+			}
+			args = append(args,
+				sessionID,
+				r.ordinal,
+				r.index,
+				nilIfEmpty(r.ev.ToolUseID),
+				nilIfEmpty(r.ev.AgentID),
+				nilIfEmpty(r.ev.SubagentSessionID),
+				sanitizePG(r.ev.Source),
+				sanitizePG(r.ev.Status),
+				sanitizePG(r.ev.Content),
+				r.ev.ContentLength,
+				ts,
+				r.ev.EventIndex,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("bulk inserting tool_result_events: %w", err)
 		}
 	}
 	return nil

@@ -430,6 +430,218 @@ func TestPairToolResultsContent(t *testing.T) {
 	}
 }
 
+func TestPairToolResultEventSummaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		msgs    []db.Message
+		blocked map[string]bool
+		want    []db.Message
+	}{
+		{
+			name: "single event becomes summary",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_wait",
+					ToolName:  "wait",
+					Category:  "Other",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID:     "call_wait",
+						AgentID:       "agent-1",
+						Source:        "wait_output",
+						Status:        "completed",
+						Content:       "Finished successfully",
+						ContentLength: len("Finished successfully"),
+					}},
+				}},
+			}},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_wait",
+					ToolName:            "wait",
+					Category:            "Other",
+					ResultContentLength: len("Finished successfully"),
+					ResultContent:       "Finished successfully",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID:     "call_wait",
+						AgentID:       "agent-1",
+						Source:        "wait_output",
+						Status:        "completed",
+						Content:       "Finished successfully",
+						ContentLength: len("Finished successfully"),
+					}},
+				}},
+			}},
+		},
+		{
+			name: "multi-agent latest summary keeps one line per agent",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_wait",
+					ToolName:  "wait",
+					Category:  "Other",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-a",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "First finished",
+							ContentLength: len("First finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-b",
+							Source:        "subagent_notification",
+							Status:        "completed",
+							Content:       "Second finished",
+							ContentLength: len("Second finished"),
+						},
+					},
+				}},
+			}},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_wait",
+					ToolName:            "wait",
+					Category:            "Other",
+					ResultContentLength: len("agent-a:\nFirst finished\n\nagent-b:\nSecond finished"),
+					ResultContent:       "agent-a:\nFirst finished\n\nagent-b:\nSecond finished",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-a",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "First finished",
+							ContentLength: len("First finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-b",
+							Source:        "subagent_notification",
+							Status:        "completed",
+							Content:       "Second finished",
+							ContentLength: len("Second finished"),
+						},
+					},
+				}},
+			}},
+		},
+		{
+			name: "blocked category keeps length but drops summary content",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_read",
+					ToolName:  "Read",
+					Category:  "Read",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID:     "call_read",
+						Source:        "wait_output",
+						Status:        "completed",
+						Content:       "secret file body",
+						ContentLength: len("secret file body"),
+					}},
+				}},
+			}},
+			blocked: map[string]bool{"Read": true},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_read",
+					ToolName:            "Read",
+					Category:            "Read",
+					ResultContentLength: len("secret file body"),
+					ResultContent:       "",
+					ResultEvents: []db.ToolResultEvent{{
+						ToolUseID:     "call_read",
+						Source:        "wait_output",
+						Status:        "completed",
+						Content:       "secret file body",
+						ContentLength: len("secret file body"),
+					}},
+				}},
+			}},
+		},
+		{
+			name: "mixed anonymous and multi-agent content keeps both",
+			msgs: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID: "call_wait",
+					ToolName:  "wait",
+					Category:  "Other",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-a",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "First finished",
+							ContentLength: len("First finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-b",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "Second finished",
+							ContentLength: len("Second finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							Source:        "subagent_notification",
+							Status:        "completed",
+							Content:       "Detached note",
+							ContentLength: len("Detached note"),
+						},
+					},
+				}},
+			}},
+			want: []db.Message{{
+				ToolCalls: []db.ToolCall{{
+					ToolUseID:           "call_wait",
+					ToolName:            "wait",
+					Category:            "Other",
+					ResultContentLength: len("agent-a:\nFirst finished\n\nagent-b:\nSecond finished\n\nDetached note"),
+					ResultContent:       "agent-a:\nFirst finished\n\nagent-b:\nSecond finished\n\nDetached note",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-a",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "First finished",
+							ContentLength: len("First finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							AgentID:       "agent-b",
+							Source:        "wait_output",
+							Status:        "completed",
+							Content:       "Second finished",
+							ContentLength: len("Second finished"),
+						},
+						{
+							ToolUseID:     "call_wait",
+							Source:        "subagent_notification",
+							Status:        "completed",
+							Content:       "Detached note",
+							ContentLength: len("Detached note"),
+						},
+					},
+				}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pairToolResultEventSummaries(tt.msgs, tt.blocked)
+			if diff := cmp.Diff(tt.want, tt.msgs); diff != "" {
+				t.Fatalf("pairToolResultEventSummaries() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestBlockedCategorySet(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -126,6 +126,34 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_subagent
     ON tool_calls(subagent_session_id)
     WHERE subagent_session_id IS NOT NULL;
 
+-- Tool result events table: canonical chronological tool outputs.
+CREATE TABLE IF NOT EXISTS tool_result_events (
+    id                       INTEGER PRIMARY KEY,
+    session_id               TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    tool_call_message_ordinal INTEGER NOT NULL,
+    call_index               INTEGER NOT NULL DEFAULT 0,
+    tool_use_id              TEXT,
+    agent_id                 TEXT,
+    subagent_session_id      TEXT,
+    source                   TEXT NOT NULL,
+    status                   TEXT NOT NULL,
+    content                  TEXT NOT NULL,
+    content_length           INTEGER NOT NULL DEFAULT 0,
+    timestamp                TEXT,
+    event_index              INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_session
+    ON tool_result_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_result_events_call
+    ON tool_result_events(
+        session_id,
+        tool_call_message_ordinal,
+        call_index,
+        event_index
+    );
+
 -- Insights table for AI-generated activity insights
 CREATE TABLE IF NOT EXISTS insights (
     id          INTEGER PRIMARY KEY,

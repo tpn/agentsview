@@ -504,6 +504,122 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	}
 }
 
+func TestMigration_ToolResultEventsTable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "initial open")
+	insertSession(t, d, "s1", "proj")
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw open")
+	_, err = conn.Exec(`
+		DROP TABLE tool_result_events;
+		PRAGMA user_version = 7;
+	`)
+	requireNoError(t, err, "drop tool_result_events")
+
+	var count int
+	err = conn.QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'tool_result_events'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify table removed")
+	if count != 0 {
+		t.Fatal("expected tool_result_events table to be absent")
+	}
+	requireNoError(t, conn.Close(), "close legacy db")
+
+	d2, err := Open(path)
+	requireNoError(t, err, "reopen after migration")
+	defer d2.Close()
+
+	requireSessionExists(t, d2, "s1")
+	if !d2.NeedsResync() {
+		t.Fatal("expected NeedsResync()=true after data version bump")
+	}
+
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'table' AND name = 'tool_result_events'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify table exists")
+	if count != 1 {
+		t.Fatal("expected tool_result_events table after reopen")
+	}
+}
+
+func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-events", "proj")
+
+	err := d.InsertMessages([]Message{
+		{
+			SessionID:  "s-events",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "tool use response",
+			HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{
+					SessionID:           "s-events",
+					ToolName:            "wait",
+					Category:            "Task",
+					ToolUseID:           "call_wait",
+					ResultContentLength: 9,
+					ResultContent:       "latest one",
+					ResultEvents: []ToolResultEvent{
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-1",
+							SubagentSessionID: "codex:agent-1",
+							Source:            "wait_output",
+							Status:            "completed",
+							Content:           "first result",
+							ContentLength:     len("first result"),
+							Timestamp:         "2026-03-27T10:00:00Z",
+							EventIndex:        0,
+						},
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-2",
+							SubagentSessionID: "codex:agent-2",
+							Source:            "subagent_notification",
+							Status:            "errored",
+							Content:           "second result",
+							ContentLength:     len("second result"),
+							Timestamp:         "2026-03-27T10:01:00Z",
+							EventIndex:        1,
+						},
+					},
+				},
+			},
+		},
+	})
+	requireNoError(t, err, "InsertMessages")
+
+	msgs, err := d.GetMessages(context.Background(), "s-events", 0, 100, true)
+	requireNoError(t, err, "GetMessages")
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+	if len(msgs[0].ToolCalls) != 1 {
+		t.Fatalf("got %d tool_calls, want 1", len(msgs[0].ToolCalls))
+	}
+	tc := msgs[0].ToolCalls[0]
+	if len(tc.ResultEvents) != 2 {
+		t.Fatalf("got %d result events, want 2", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].AgentID != "agent-1" {
+		t.Errorf("result event 0 agent_id = %q, want %q", tc.ResultEvents[0].AgentID, "agent-1")
+	}
+	if tc.ResultEvents[1].Source != "subagent_notification" {
+		t.Errorf("result event 1 source = %q, want %q", tc.ResultEvents[1].Source, "subagent_notification")
+	}
+}
+
 func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -3431,6 +3547,78 @@ func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
 	if ordinal != 1 {
 		t.Errorf("tool_call message ordinal = %d, want 1",
 			ordinal)
+	}
+}
+
+func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		userMsg("s1", 0, "hello"),
+		asstMsg("s1", 1, "waited on child"),
+	)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category,
+			 tool_use_id, result_content_length, result_content)
+		SELECT id, session_id, 'wait', 'Other',
+			'call_wait', 23, 'Finished successfully'
+		FROM messages
+		WHERE session_id = 's1' AND ordinal = 1`,
+	)
+	requireNoError(t, err, "insert tool_call")
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_result_events
+			(session_id, tool_call_message_ordinal, call_index,
+			 tool_use_id, agent_id, subagent_session_id,
+			 source, status, content, content_length,
+			 timestamp, event_index)
+		VALUES
+			('s1', 1, 0, 'call_wait', 'agent-1', 'codex:agent-1',
+			 'wait_output', 'completed', 'Finished successfully',
+			 23, '2026-03-27T18:00:00Z', 0)`,
+	)
+	requireNoError(t, err, "insert tool_result_event")
+	srcDB.Close()
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	if count != 1 {
+		t.Fatalf("expected 1 orphaned, got %d", count)
+	}
+
+	msgs, err := dstDB.GetAllMessages(context.Background(), "s1")
+	requireNoError(t, err, "GetAllMessages")
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(msgs))
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(msgs[1].ToolCalls))
+	}
+	tc := msgs[1].ToolCalls[0]
+	if tc.ResultContent != "Finished successfully" {
+		t.Fatalf("result_content = %q, want %q", tc.ResultContent, "Finished successfully")
+	}
+	if len(tc.ResultEvents) != 1 {
+		t.Fatalf("result events len = %d, want 1", len(tc.ResultEvents))
+	}
+	if tc.ResultEvents[0].Source != "wait_output" {
+		t.Fatalf("event source = %q, want %q", tc.ResultEvents[0].Source, "wait_output")
+	}
+	if tc.ResultEvents[0].SubagentSessionID != "codex:agent-1" {
+		t.Fatalf(
+			"subagent_session_id = %q, want %q",
+			tc.ResultEvents[0].SubagentSessionID, "codex:agent-1",
+		)
 	}
 }
 

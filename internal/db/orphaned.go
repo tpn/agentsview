@@ -132,16 +132,27 @@ func (d *DB) CopyOrphanedDataFrom(
 
 	// Copy tool_calls. Map old message_id to new
 	// message_id via the (session_id, ordinal) natural key.
+	toolCallCols := []string{
+		"message_id", "session_id", "tool_name", "category",
+		"tool_use_id", "input_json", "skill_name",
+		"result_content_length",
+	}
+	toolCallSelect := []string{
+		"new_m.id", "otc.session_id", "otc.tool_name",
+		"otc.category", "otc.tool_use_id", "otc.input_json",
+		"otc.skill_name", "otc.result_content_length",
+	}
+	if oldDBHasColumn(ctx, tx, "tool_calls", "result_content") {
+		toolCallCols = append(toolCallCols, "result_content")
+		toolCallSelect = append(toolCallSelect, "otc.result_content")
+	}
+	toolCallCols = append(toolCallCols, "subagent_session_id")
+	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, skill_name,
-			 result_content_length, subagent_session_id)
+			(`+strings.Join(toolCallCols, ", ")+`)
 		SELECT
-			new_m.id, otc.session_id, otc.tool_name,
-			otc.category, otc.tool_use_id, otc.input_json,
-			otc.skill_name, otc.result_content_length,
-			otc.subagent_session_id
+			`+strings.Join(toolCallSelect, ", ")+`
 		FROM old_db.tool_calls otc
 		JOIN old_db.messages old_m
 			ON old_m.id = otc.message_id
@@ -155,6 +166,31 @@ func (d *DB) CopyOrphanedDataFrom(
 		return 0, fmt.Errorf(
 			"copying orphaned tool_calls: %w", err,
 		)
+	}
+
+	if oldDBHasTable(ctx, tx, "tool_result_events") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO tool_result_events
+				(session_id, tool_call_message_ordinal,
+				 call_index, tool_use_id, agent_id,
+				 subagent_session_id, source, status,
+				 content, content_length, timestamp,
+				 event_index)
+			SELECT
+				session_id, tool_call_message_ordinal,
+				call_index, tool_use_id, agent_id,
+				subagent_session_id, source, status,
+				content, content_length, timestamp,
+				event_index
+			FROM old_db.tool_result_events
+			WHERE session_id IN (
+				SELECT id FROM _orphaned_ids
+			)`,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"copying orphaned tool_result_events: %w", err,
+			)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

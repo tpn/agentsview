@@ -2473,9 +2473,33 @@ func convertToolCalls(
 			InputJSON:         tc.InputJSON,
 			SkillName:         tc.SkillName,
 			SubagentSessionID: tc.SubagentSessionID,
+			ResultEvents:      convertToolResultEvents(tc.ResultEvents),
 		}
 	}
 	return calls
+}
+
+func convertToolResultEvents(
+	parsed []parser.ParsedToolResultEvent,
+) []db.ToolResultEvent {
+	if len(parsed) == 0 {
+		return nil
+	}
+	events := make([]db.ToolResultEvent, len(parsed))
+	for i, ev := range parsed {
+		events[i] = db.ToolResultEvent{
+			ToolUseID:         ev.ToolUseID,
+			AgentID:           ev.AgentID,
+			SubagentSessionID: ev.SubagentSessionID,
+			Source:            ev.Source,
+			Status:            ev.Status,
+			Content:           ev.Content,
+			ContentLength:     len(ev.Content),
+			Timestamp:         timeutil.Format(ev.Timestamp),
+			EventIndex:        i,
+		}
+	}
+	return events
 }
 
 // convertToolResults maps parsed tool results to db.ToolResult
@@ -2502,6 +2526,7 @@ func convertToolResults(
 // tool_result blocks (no displayable text).
 func pairAndFilter(msgs []db.Message, blocked map[string]bool) []db.Message {
 	pairToolResults(msgs, blocked)
+	pairToolResultEventSummaries(msgs, blocked)
 	filtered := msgs[:0]
 	for _, m := range msgs {
 		if m.Role == "user" &&
@@ -2540,4 +2565,78 @@ func pairToolResults(msgs []db.Message, blocked map[string]bool) {
 			}
 		}
 	}
+}
+
+func pairToolResultEventSummaries(
+	msgs []db.Message, blocked map[string]bool,
+) {
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			tc := &msgs[i].ToolCalls[j]
+			if len(tc.ResultEvents) == 0 {
+				continue
+			}
+			summary := summarizeToolResultEvents(tc.ResultEvents)
+			tc.ResultContentLength = len(summary)
+			if !blocked[tc.Category] {
+				tc.ResultContent = summary
+			}
+		}
+	}
+}
+
+func summarizeToolResultEvents(
+	events []db.ToolResultEvent,
+) string {
+	if len(events) == 0 {
+		return ""
+	}
+	type agentSummary struct {
+		order   int
+		content string
+	}
+	latestByAgent := map[string]agentSummary{}
+	orderedAgents := make([]string, 0, len(events))
+	lastAnon := ""
+	allHaveAgentID := true
+	for _, ev := range events {
+		if strings.TrimSpace(ev.Content) == "" {
+			continue
+		}
+		agentID := strings.TrimSpace(ev.AgentID)
+		if agentID == "" {
+			allHaveAgentID = false
+			lastAnon = ev.Content
+			continue
+		}
+		if _, ok := latestByAgent[agentID]; !ok {
+			latestByAgent[agentID] = agentSummary{
+				order:   len(orderedAgents),
+				content: ev.Content,
+			}
+			orderedAgents = append(orderedAgents, agentID)
+			continue
+		}
+		entry := latestByAgent[agentID]
+		entry.content = ev.Content
+		latestByAgent[agentID] = entry
+	}
+	if len(latestByAgent) <= 1 {
+		if len(latestByAgent) == 1 {
+			summary := latestByAgent[orderedAgents[0]].content
+			if lastAnon != "" {
+				return summary + "\n\n" + lastAnon
+			}
+			return summary
+		}
+		return lastAnon
+	}
+	parts := make([]string, 0, len(orderedAgents))
+	for _, agentID := range orderedAgents {
+		parts = append(parts, agentID+":\n"+latestByAgent[agentID].content)
+	}
+	if !allHaveAgentID && lastAnon != "" {
+		parts = append(parts, lastAnon)
+	}
+	return strings.Join(parts, "\n\n")
 }

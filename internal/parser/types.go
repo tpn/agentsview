@@ -295,6 +295,7 @@ type ParsedToolCall struct {
 	InputJSON         string // raw JSON of the input object
 	SkillName         string // skill name when ToolName is "Skill"
 	SubagentSessionID string // linked subagent session file (e.g. "agent-{task_id}")
+	ResultEvents      []ParsedToolResultEvent
 }
 
 // ParsedToolResult holds metadata about a tool result block in a
@@ -303,6 +304,18 @@ type ParsedToolResult struct {
 	ToolUseID     string
 	ContentLength int
 	ContentRaw    string // raw JSON of the content field; decode with DecodeContent
+}
+
+// ParsedToolResultEvent is a canonical chronological update attached
+// to a tool call. Used for Codex subagent terminal status updates.
+type ParsedToolResultEvent struct {
+	ToolUseID         string
+	AgentID           string
+	SubagentSessionID string
+	Source            string
+	Status            string
+	Content           string
+	Timestamp         time.Time
 }
 
 // ParsedMessage holds a single extracted message.

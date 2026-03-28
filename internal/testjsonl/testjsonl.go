@@ -217,6 +217,44 @@ func CodexFunctionCallFieldsJSON(
 	return mustMarshal(m)
 }
 
+// CodexFunctionCallWithCallIDJSON returns a Codex function_call
+// response_item with an explicit call_id.
+func CodexFunctionCallWithCallIDJSON(
+	name, callID string, arguments any, timestamp string,
+) string {
+	payload := map[string]any{
+		"type":    "function_call",
+		"name":    name,
+		"call_id": callID,
+	}
+	if arguments != nil {
+		payload["arguments"] = arguments
+	}
+	m := map[string]any{
+		"type":      "response_item",
+		"timestamp": timestamp,
+		"payload":   payload,
+	}
+	return mustMarshal(m)
+}
+
+// CodexFunctionCallOutputJSON returns a Codex
+// function_call_output response_item.
+func CodexFunctionCallOutputJSON(
+	callID string, output any, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "response_item",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type":    "function_call_output",
+			"call_id": callID,
+			"output":  output,
+		},
+	}
+	return mustMarshal(m)
+}
+
 // CodexTurnContextJSON returns a Codex turn_context entry as a
 // JSON string with the given model.
 func CodexTurnContextJSON(model, timestamp string) string {

@@ -1,9 +1,11 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,26 +21,58 @@ const (
 	codexOriginatorExec   = "codex_exec"
 )
 
+var errCodexIncrementalNeedsFullParse = errors.New(
+	"codex subagent event requires full parse",
+)
+
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
-	messages     []ParsedMessage
-	firstMessage string
-	startedAt    time.Time
-	endedAt      time.Time
-	sessionID    string
-	project      string
-	ordinal      int
-	includeExec  bool
-	currentModel string
+	messages             []ParsedMessage
+	firstMessage         string
+	startedAt            time.Time
+	endedAt              time.Time
+	sessionID            string
+	project              string
+	ordinal              int
+	includeExec          bool
+	currentModel         string
+	callNames            map[string]string
+	callRefs             map[string]codexToolCallRef
+	subagentMap          map[string]string
+	agentSpawnCalls      map[string]string
+	agentWaitCalls       map[string]string
+	pendingAgentEvents   map[string][]codexPendingEvent
+	orphanNotificationIx map[string]int
+}
+
+type codexToolCallRef struct {
+	messageIndex int
+	callIndex    int
+}
+
+type codexPendingEvent struct {
+	agentID   string
+	source    string
+	status    string
+	text      string
+	timestamp time.Time
+	ordinal   int
 }
 
 func newCodexSessionBuilder(
 	includeExec bool,
 ) *codexSessionBuilder {
 	return &codexSessionBuilder{
-		project:     "unknown",
-		includeExec: includeExec,
+		project:              "unknown",
+		includeExec:          includeExec,
+		callNames:            make(map[string]string),
+		callRefs:             make(map[string]codexToolCallRef),
+		subagentMap:          make(map[string]string),
+		agentSpawnCalls:      make(map[string]string),
+		agentWaitCalls:       make(map[string]string),
+		pendingAgentEvents:   make(map[string][]codexPendingEvent),
+		orphanNotificationIx: make(map[string]int),
 	}
 }
 
@@ -98,8 +132,12 @@ func (b *codexSessionBuilder) handleSessionMeta(
 func (b *codexSessionBuilder) handleResponseItem(
 	payload gjson.Result, ts time.Time,
 ) {
-	if payload.Get("type").Str == "function_call" {
+	switch payload.Get("type").Str {
+	case "function_call":
 		b.handleFunctionCall(payload, ts)
+		return
+	case "function_call_output":
+		b.handleFunctionCallOutput(payload, ts)
 		return
 	}
 
@@ -110,6 +148,10 @@ func (b *codexSessionBuilder) handleResponseItem(
 
 	content := extractCodexContent(payload)
 	if strings.TrimSpace(content) == "" {
+		return
+	}
+
+	if role == "user" && b.handleSubagentNotification(content, ts) {
 		return
 	}
 
@@ -141,9 +183,18 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	if name == "" {
 		return
 	}
+	callID := payload.Get("call_id").Str
+	if callID != "" {
+		b.callNames[callID] = name
+	}
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
+	waitAgentIDs := []string(nil)
+	if name == "wait" && callID != "" {
+		args, _ := parseCodexFunctionArgs(payload)
+		waitAgentIDs = codexWaitAgentIDs(args)
+	}
 
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:       b.ordinal,
@@ -154,12 +205,239 @@ func (b *codexSessionBuilder) handleFunctionCall(
 		ContentLength: len(content),
 		Model:         b.currentModel,
 		ToolCalls: []ParsedToolCall{{
+			ToolUseID: callID,
 			ToolName:  name,
 			Category:  NormalizeToolCategory(name),
 			InputJSON: inputJSON,
 		}},
 	})
+	if callID != "" {
+		b.callRefs[callID] = codexToolCallRef{
+			messageIndex: len(b.messages) - 1,
+			callIndex:    0,
+		}
+	}
 	b.ordinal++
+
+	if name == "wait" && callID != "" {
+		for _, agentID := range waitAgentIDs {
+			b.agentWaitCalls[agentID] = callID
+			b.claimPendingAgentEvents(callID, agentID)
+		}
+	}
+}
+
+func (b *codexSessionBuilder) handleFunctionCallOutput(
+	payload gjson.Result, ts time.Time,
+) {
+	callID := payload.Get("call_id").Str
+	if callID == "" {
+		return
+	}
+
+	output, _ := parseCodexFunctionOutput(payload)
+	if !output.Exists() {
+		return
+	}
+
+	switch b.callNames[callID] {
+	case "spawn_agent":
+		agentID := strings.TrimSpace(output.Get("agent_id").Str)
+		if agentID == "" {
+			return
+		}
+		b.subagentMap[callID] = "codex:" + agentID
+		b.agentSpawnCalls[agentID] = callID
+	case "wait":
+		status := output.Get("status")
+		if !status.Exists() || !status.IsObject() {
+			return
+		}
+		for agentID, entry := range status.Map() {
+			statusName, text := codexTerminalSubagentEvent(entry)
+			if text == "" {
+				continue
+			}
+			b.appendCallResultEvent(callID, ParsedToolResultEvent{
+				ToolUseID:         callID,
+				AgentID:           agentID,
+				SubagentSessionID: codexSubagentSessionID(agentID),
+				Source:            "wait_output",
+				Status:            statusName,
+				Content:           text,
+				Timestamp:         ts,
+			})
+		}
+	}
+}
+
+func (b *codexSessionBuilder) handleSubagentNotification(
+	content string, ts time.Time,
+) bool {
+	agentID, statusName, text := parseCodexSubagentNotification(content)
+	if agentID == "" || text == "" {
+		return false
+	}
+	if callID := b.agentWaitCalls[agentID]; callID != "" {
+		b.appendCallResultEvent(callID, ParsedToolResultEvent{
+			AgentID:           agentID,
+			SubagentSessionID: codexSubagentSessionID(agentID),
+			Source:            "subagent_notification",
+			Status:            statusName,
+			Content:           text,
+			Timestamp:         ts,
+		})
+		return true
+	}
+
+	b.pendingAgentEvents[agentID] = append(
+		b.pendingAgentEvents[agentID], codexPendingEvent{
+			agentID:   agentID,
+			source:    "subagent_notification",
+			status:    statusName,
+			text:      text,
+			timestamp: ts,
+			ordinal:   b.ordinal,
+		},
+	)
+	b.ordinal++
+	return true
+}
+
+func (b *codexSessionBuilder) appendCallResultEvent(
+	callID string, ev ParsedToolResultEvent,
+) {
+	if callID == "" {
+		return
+	}
+	ref, ok := b.callRefs[callID]
+	if !ok || ref.messageIndex < 0 || ref.messageIndex >= len(b.messages) {
+		return
+	}
+	if ref.callIndex < 0 || ref.callIndex >= len(b.messages[ref.messageIndex].ToolCalls) {
+		return
+	}
+	tc := &b.messages[ref.messageIndex].ToolCalls[ref.callIndex]
+	if ev.ToolUseID == "" {
+		ev.ToolUseID = tc.ToolUseID
+	}
+	if ev.SubagentSessionID == "" && ev.AgentID != "" {
+		ev.SubagentSessionID = codexSubagentSessionID(ev.AgentID)
+	}
+	if b.hasEquivalentCallResultEvent(tc.ResultEvents, ev) {
+		return
+	}
+	tc.ResultEvents = append(tc.ResultEvents, ev)
+}
+
+func (b *codexSessionBuilder) hasEquivalentCallResultEvent(
+	events []ParsedToolResultEvent, candidate ParsedToolResultEvent,
+) bool {
+	for _, existing := range events {
+		if existing.AgentID == candidate.AgentID &&
+			existing.Status == candidate.Status &&
+			existing.Content == candidate.Content {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *codexSessionBuilder) claimPendingAgentEvents(
+	callID, agentID string,
+) {
+	pending := b.pendingAgentEvents[agentID]
+	if len(pending) == 0 {
+		return
+	}
+	for _, ev := range pending {
+		b.appendCallResultEvent(callID, ParsedToolResultEvent{
+			AgentID:           ev.agentID,
+			SubagentSessionID: codexSubagentSessionID(ev.agentID),
+			Source:            ev.source,
+			Status:            ev.status,
+			Content:           ev.text,
+			Timestamp:         ev.timestamp,
+		})
+	}
+	delete(b.pendingAgentEvents, agentID)
+}
+
+func (b *codexSessionBuilder) flushPendingAgentResults() {
+	if len(b.pendingAgentEvents) == 0 {
+		return
+	}
+	agentIDs := make([]string, 0, len(b.pendingAgentEvents))
+	for agentID := range b.pendingAgentEvents {
+		agentIDs = append(agentIDs, agentID)
+	}
+	sort.Strings(agentIDs)
+	for _, agentID := range agentIDs {
+		pending := b.pendingAgentEvents[agentID]
+		switch {
+		case b.agentWaitCalls[agentID] != "":
+			b.claimPendingAgentEvents(b.agentWaitCalls[agentID], agentID)
+		case b.agentSpawnCalls[agentID] != "":
+			b.claimPendingAgentEvents(b.agentSpawnCalls[agentID], agentID)
+		default:
+			for _, ev := range pending {
+				key := agentID + "\x00" + ev.status + "\x00" + ev.text
+				if _, ok := b.orphanNotificationIx[key]; ok {
+					continue
+				}
+				idx := b.insertMessage(ParsedMessage{
+					Ordinal:       ev.ordinal,
+					Role:          RoleUser,
+					Content:       ev.text,
+					Timestamp:     ev.timestamp,
+					Model:         b.currentModel,
+					ContentLength: len(ev.text),
+				})
+				b.orphanNotificationIx[key] = idx
+			}
+			delete(b.pendingAgentEvents, agentID)
+		}
+	}
+}
+
+func codexSubagentSessionID(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return ""
+	}
+	return "codex:" + agentID
+}
+
+func (b *codexSessionBuilder) normalizeOrdinals() {
+	sort.SliceStable(b.messages, func(i, j int) bool {
+		if b.messages[i].Ordinal == b.messages[j].Ordinal {
+			return i < j
+		}
+		return b.messages[i].Ordinal < b.messages[j].Ordinal
+	})
+	for i := range b.messages {
+		b.messages[i].Ordinal = i
+	}
+}
+
+func (b *codexSessionBuilder) insertMessage(msg ParsedMessage) int {
+	idx := len(b.messages)
+	for i, existing := range b.messages {
+		if existing.Ordinal > msg.Ordinal {
+			idx = i
+			break
+		}
+	}
+	b.messages = append(b.messages, ParsedMessage{})
+	copy(b.messages[idx+1:], b.messages[idx:])
+	b.messages[idx] = msg
+	for callID, ref := range b.callRefs {
+		if ref.messageIndex >= idx {
+			ref.messageIndex++
+			b.callRefs[callID] = ref
+		}
+	}
+	return idx
 }
 
 func formatCodexFunctionCall(
@@ -175,6 +453,8 @@ func formatCodexFunctionCall(
 		return formatCodexWriteStdinCall(summary, args, rawArgs)
 	case "apply_patch":
 		return formatCodexApplyPatchCall(summary, args, rawArgs)
+	case "spawn_agent":
+		return formatCodexSpawnAgentCall(summary, args, rawArgs)
 	}
 
 	category := NormalizeToolCategory(name)
@@ -358,6 +638,33 @@ func formatCodexApplyPatchCall(
 	return header
 }
 
+func formatCodexSpawnAgentCall(
+	summary string, args gjson.Result, rawArgs string,
+) string {
+	if summary == "" {
+		summary = firstNonEmpty(
+			codexArgValue(args, "agent_type"),
+			codexArgValue(args, "subagent_type"),
+			"spawn_agent",
+		)
+	}
+
+	header := formatToolHeader("Task", summary)
+	prompt := firstNonEmpty(
+		codexArgValue(args, "description"),
+		codexArgValue(args, "message"),
+		codexArgValue(args, "prompt"),
+	)
+	if prompt != "" {
+		firstLine, _, _ := strings.Cut(prompt, "\n")
+		return header + "\n" + truncate(firstLine, 220)
+	}
+	if preview := codexArgPreview(args, rawArgs); preview != "" {
+		return header + "\n" + preview
+	}
+	return header
+}
+
 func extractPatchedFiles(patch string) []string {
 	if patch == "" {
 		return nil
@@ -515,6 +822,122 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func parseCodexFunctionOutput(
+	payload gjson.Result,
+) (gjson.Result, string) {
+	out := payload.Get("output")
+	if !out.Exists() {
+		return gjson.Result{}, ""
+	}
+
+	switch out.Type {
+	case gjson.String:
+		s := strings.TrimSpace(out.Str)
+		if s == "" {
+			return gjson.Result{}, ""
+		}
+		if gjson.Valid(s) {
+			return gjson.Parse(s), s
+		}
+		return gjson.Result{}, s
+	default:
+		raw := strings.TrimSpace(out.Raw)
+		if raw == "" {
+			return gjson.Result{}, ""
+		}
+		if gjson.Valid(raw) {
+			return gjson.Parse(raw), raw
+		}
+		return gjson.Result{}, raw
+	}
+}
+
+func codexWaitAgentIDs(args gjson.Result) []string {
+	if !args.Exists() {
+		return nil
+	}
+	ids := args.Get("ids")
+	if !ids.Exists() || !ids.IsArray() {
+		return nil
+	}
+
+	var out []string
+	for _, item := range ids.Array() {
+		id := strings.TrimSpace(item.Str)
+		if id == "" {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func parseCodexSubagentNotification(
+	content string,
+) (agentID, statusName, text string) {
+	if !isCodexSubagentNotification(content) {
+		return "", "", ""
+	}
+	body := strings.TrimSpace(content)
+	body = strings.TrimPrefix(body, "<subagent_notification>")
+	body = strings.TrimSuffix(body, "</subagent_notification>")
+	body = strings.TrimSpace(body)
+	if !gjson.Valid(body) {
+		return "", "", ""
+	}
+	parsed := gjson.Parse(body)
+	agentID = strings.TrimSpace(parsed.Get("agent_id").Str)
+	status := parsed.Get("status")
+	statusName, text = codexTerminalSubagentEvent(status)
+	return agentID, statusName, text
+}
+
+func codexTerminalSubagentEvent(status gjson.Result) (string, string) {
+	if text := strings.TrimSpace(status.Get("completed").Str); text != "" {
+		return "completed", text
+	}
+	if text := strings.TrimSpace(status.Get("errored").Str); text != "" {
+		return "errored", text
+	}
+	return "", ""
+}
+
+func codexTerminalSubagentStatus(status gjson.Result) string {
+	_, text := codexTerminalSubagentEvent(status)
+	return text
+}
+
+func isCodexSubagentFunctionOutput(output gjson.Result) bool {
+	if !output.Exists() {
+		return false
+	}
+	if strings.TrimSpace(output.Get("agent_id").Str) != "" {
+		return true
+	}
+
+	status := output.Get("status")
+	if !status.Exists() || !status.IsObject() {
+		return false
+	}
+	entries := status.Map()
+	if len(entries) == 0 {
+		return false
+	}
+	for agentID, entry := range entries {
+		if strings.TrimSpace(agentID) == "" || !entry.IsObject() {
+			return false
+		}
+		if codexTerminalSubagentStatus(entry) != "" {
+			continue
+		}
+		if strings.TrimSpace(entry.Get("running").Str) != "" {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // extractCodexContent joins all text blocks from a Codex
 // response item's content array.
 func extractCodexContent(payload gjson.Result) string {
@@ -571,6 +994,10 @@ func ParseCodexSession(
 			fmt.Errorf("reading codex %s: %w", path, err)
 	}
 
+	b.flushPendingAgentResults()
+	b.normalizeOrdinals()
+	annotateSubagentSessions(b.messages, b.subagentMap)
+
 	sessionID := b.sessionID
 	if sessionID == "" {
 		sessionID = strings.TrimSuffix(
@@ -619,13 +1046,21 @@ func ParseCodexSessionFrom(
 ) ([]ParsedMessage, time.Time, int64, error) {
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
+	var fallbackErr error
 
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			if fallbackErr != nil {
+				return
+			}
 			// Skip session_meta — already processed in
 			// the initial full parse.
 			if gjson.Get(line, "type").Str ==
 				codexTypeSessionMeta {
+				return
+			}
+			if codexIncrementalNeedsFullParse(line) {
+				fallbackErr = errCodexIncrementalNeedsFullParse
 				return
 			}
 			b.processLine(line)
@@ -637,6 +1072,12 @@ func ParseCodexSessionFrom(
 			path, offset, err,
 		)
 	}
+	if fallbackErr != nil {
+		return nil, time.Time{}, 0, fallbackErr
+	}
+
+	b.flushPendingAgentResults()
+	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	return b.messages, b.endedAt, consumed, nil
 }
@@ -644,5 +1085,37 @@ func ParseCodexSessionFrom(
 func isCodexSystemMessage(content string) bool {
 	return strings.HasPrefix(content, "# AGENTS.md") ||
 		strings.HasPrefix(content, "<environment_context>") ||
-		strings.HasPrefix(content, "<INSTRUCTIONS>")
+		strings.HasPrefix(content, "<INSTRUCTIONS>") ||
+		isCodexSubagentNotification(content)
+}
+
+func isCodexSubagentNotification(content string) bool {
+	return strings.HasPrefix(
+		strings.TrimSpace(content),
+		"<subagent_notification>",
+	)
+}
+
+func codexIncrementalNeedsFullParse(line string) bool {
+	if gjson.Get(line, "type").Str != codexTypeResponseItem {
+		return false
+	}
+
+	payload := gjson.Get(line, "payload")
+	switch payload.Get("type").Str {
+	case "function_call":
+		return payload.Get("name").Str == "wait"
+	case "function_call_output":
+		output, _ := parseCodexFunctionOutput(payload)
+		return isCodexSubagentFunctionOutput(output)
+	default:
+		role := payload.Get("role").Str
+		if role != "user" {
+			return false
+		}
+		agentID, _, text := parseCodexSubagentNotification(
+			extractCodexContent(payload),
+		)
+		return agentID != "" && text != ""
+	}
 }

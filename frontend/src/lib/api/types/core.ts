@@ -41,6 +41,19 @@ export interface ProjectInfo {
   session_count: number;
 }
 
+/** Matches Go ToolResultEvent struct in internal/db/messages.go */
+export interface ToolResultEvent {
+  tool_use_id?: string;
+  agent_id?: string;
+  subagent_session_id?: string;
+  source: string;
+  status: string;
+  content: string;
+  content_length: number;
+  timestamp?: string;
+  event_index: number;
+}
+
 /** Matches Go ToolCall struct in internal/db/messages.go */
 export interface ToolCall {
   tool_name: string;
@@ -51,6 +64,7 @@ export interface ToolCall {
   result_content_length?: number;
   result_content?: string;
   subagent_session_id?: string;
+  result_events?: ToolResultEvent[];
 }
 
 /** Matches Go Message struct in internal/db/messages.go */

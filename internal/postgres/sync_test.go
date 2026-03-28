@@ -59,6 +59,14 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		t.Fatalf("second EnsureSchema: %v", err)
 	}
+
+	var eventIndex int
+	err = ps.pg.QueryRowContext(ctx,
+		"SELECT event_index FROM tool_result_events LIMIT 0",
+	).Scan(&eventIndex)
+	if err != nil && err != sql.ErrNoRows {
+		t.Fatalf("tool_result_events schema probe: %v", err)
+	}
 }
 
 func TestPushSingleSession(t *testing.T) {
@@ -299,6 +307,85 @@ func TestPushWithToolCalls(t *testing.T) {
 			"result_content_length = %d, want 42",
 			resultLen,
 		)
+	}
+}
+
+func TestPushWithToolResultEvents(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	sess := db.Session{
+		ID:           "sess-events-001",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "codex",
+		MessageCount: 1,
+	}
+	if err := local.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{
+		{
+			SessionID:  "sess-events-001",
+			Ordinal:    0,
+			Role:       "assistant",
+			Content:    "tool use response",
+			HasToolUse: true,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolName:  "wait",
+					Category:  "Task",
+					ToolUseID: "call_wait",
+					ResultEvents: []db.ToolResultEvent{
+						{
+							ToolUseID:         "call_wait",
+							AgentID:           "agent-1",
+							SubagentSessionID: "codex:agent-1",
+							Source:            "wait_output",
+							Status:            "completed",
+							Content:           "first result",
+							ContentLength:     len("first result"),
+							Timestamp:         "2026-03-27T10:00:00Z",
+							EventIndex:        0,
+						},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+
+	if _, err := ps.Push(ctx, false); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	var count int
+	err = ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM tool_result_events WHERE session_id = $1",
+		"sess-events-001",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("querying pg tool_result_events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("pg tool_result_events = %d, want 1", count)
 	}
 }
 
