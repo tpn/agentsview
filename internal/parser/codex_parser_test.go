@@ -537,6 +537,45 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		})
 	})
 
+	t.Run("wait result events preserve JSON order for multiple agents", func(t *testing.T) {
+		firstID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		secondID := "019c9c96-6ee7-77c0-ba4c-380f844289d6"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-order", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run child agents", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{firstID, secondID},
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait",
+				"{\"status\":{\""+secondID+"\":{\"completed\":\"Second agent finished\"},\""+firstID+"\":{\"completed\":\"First agent finished\"}}}",
+				tsLate,
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 2, len(msgs))
+		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{
+			{
+				ToolUseID:         "call_wait",
+				AgentID:           secondID,
+				SubagentSessionID: "codex:" + secondID,
+				Source:            "wait_output",
+				Status:            "completed",
+				Content:           "Second agent finished",
+			},
+			{
+				ToolUseID:         "call_wait",
+				AgentID:           firstID,
+				SubagentSessionID: "codex:" + firstID,
+				Source:            "wait_output",
+				Status:            "completed",
+				Content:           "First agent finished",
+			},
+		})
+	})
+
 	t.Run("orphaned terminal notifications dedupe", func(t *testing.T) {
 		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
 		completed := "<subagent_notification>\n" +

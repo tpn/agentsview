@@ -2989,6 +2989,92 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	}
 }
 
+func TestIncrementalSync_CodexSubagentAppendFallsBackToFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-cx-sub", "/tmp/proj",
+			"codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+			"agent_type": "awaiter",
+			"message":    "run it",
+		}, tsEarlyS5),
+		testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, "2024-01-01T10:01:00Z"),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-20240101-inc-cx-sub.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(
+		t, env.db, "codex:inc-cx-sub", 2,
+	)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+			"ids": []string{childID},
+		}, "2024-01-01T10:01:06Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call_wait",
+			"{\"status\":{\""+childID+"\":{\"completed\":\"Finished successfully\"}}}",
+			"2024-01-01T10:01:07Z",
+		),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	_, err = f.WriteString(appended)
+	f.Close()
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	// SyncPaths hits the incremental Codex path first. The appended
+	// wait call is an explicit full-parse fallback case and should
+	// still produce the final parsed state successfully.
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(
+		t, env.db, "codex:inc-cx-sub", 3,
+	)
+	msgs := fetchMessages(t, env.db, "codex:inc-cx-sub")
+	if len(msgs) != 3 {
+		t.Fatalf("messages len = %d, want 3", len(msgs))
+	}
+	if len(msgs[2].ToolCalls) != 1 {
+		t.Fatalf("tool calls len = %d, want 1", len(msgs[2].ToolCalls))
+	}
+	waitCall := msgs[2].ToolCalls[0]
+	if waitCall.ToolName != "wait" {
+		t.Fatalf("tool name = %q, want %q", waitCall.ToolName, "wait")
+	}
+	if len(waitCall.ResultEvents) != 1 {
+		t.Fatalf("result events len = %d, want 1", len(waitCall.ResultEvents))
+	}
+	if waitCall.ResultEvents[0].AgentID != childID {
+		t.Fatalf("event agent_id = %q, want %q", waitCall.ResultEvents[0].AgentID, childID)
+	}
+	if waitCall.ResultEvents[0].Content != "Finished successfully" {
+		t.Fatalf(
+			"event content = %q, want %q",
+			waitCall.ResultEvents[0].Content, "Finished successfully",
+		)
+	}
+	if waitCall.ResultContent != "Finished successfully" {
+		t.Fatalf(
+			"result_content = %q, want %q",
+			waitCall.ResultContent, "Finished successfully",
+		)
+	}
+}
+
 func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
 	env := setupTestEnv(t)
 

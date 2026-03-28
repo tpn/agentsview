@@ -1478,6 +1478,13 @@ func (e *Engine) tryIncrementalJSONL(
 		file.Path, inc.FileSize, maxOrd+1,
 	)
 	if err != nil {
+		if parser.IsIncrementalFullParseFallback(err) {
+			log.Printf(
+				"incremental %s %s: %v (explicit full parse fallback)",
+				agent, file.Path, err,
+			)
+			return processResult{}, false
+		}
 		log.Printf(
 			"incremental %s %s: %v (full parse)",
 			agent, file.Path, err,

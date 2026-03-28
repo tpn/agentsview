@@ -253,10 +253,11 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		if !status.Exists() || !status.IsObject() {
 			return
 		}
-		for agentID, entry := range status.Map() {
+		status.ForEach(func(key, entry gjson.Result) bool {
+			agentID := key.Str
 			statusName, text := codexTerminalSubagentEvent(entry)
 			if text == "" {
-				continue
+				return true
 			}
 			b.appendCallResultEvent(callID, ParsedToolResultEvent{
 				ToolUseID:         callID,
@@ -267,7 +268,8 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 				Content:           text,
 				Timestamp:         ts,
 			})
-		}
+			return true
+		})
 	}
 }
 
@@ -1084,6 +1086,12 @@ func ParseCodexSessionFrom(
 	annotateSubagentSessions(b.messages, b.subagentMap)
 
 	return b.messages, b.endedAt, consumed, nil
+}
+
+// IsIncrementalFullParseFallback reports whether an incremental
+// Codex parse error requires the caller to fall back to a full parse.
+func IsIncrementalFullParseFallback(err error) bool {
+	return errors.Is(err, errCodexIncrementalNeedsFullParse)
 }
 
 func isCodexSystemMessage(content string) bool {
