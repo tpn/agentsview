@@ -346,14 +346,24 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 
 		require.NotNil(t, sess)
 		assert.Equal(t, 2, len(msgs))
-		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
-			ToolUseID:         "call_spawn",
-			AgentID:           childID,
-			SubagentSessionID: "codex:" + childID,
-			Source:            "subagent_notification",
-			Status:            "completed",
-			Content:           "Finished successfully",
-		}})
+		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{
+			{
+				ToolUseID:         "call_spawn",
+				AgentID:           childID,
+				SubagentSessionID: "codex:" + childID,
+				Source:            "subagent_notification",
+				Status:            "running",
+				Content:           "Still working",
+			},
+			{
+				ToolUseID:         "call_spawn",
+				AgentID:           childID,
+				SubagentSessionID: "codex:" + childID,
+				Source:            "subagent_notification",
+				Status:            "completed",
+				Content:           "Finished successfully",
+			},
+		})
 	})
 
 	t.Run("notification after wait binds to wait call", func(t *testing.T) {
@@ -528,11 +538,47 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 				ToolUseID:         "call_wait",
 				AgentID:           runningID,
 				SubagentSessionID: "codex:" + runningID,
+				Source:            "wait_output",
+				Status:            "running",
+				Content:           "Still working",
+			},
+			{
+				ToolUseID:         "call_wait",
+				AgentID:           runningID,
+				SubagentSessionID: "codex:" + runningID,
 				Source:            "subagent_notification",
 				Status:            "completed",
 				Content:           "Second agent finished",
 			},
 		})
+	})
+
+	t.Run("running-only wait output is preserved as a result event", func(t *testing.T) {
+		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-subagent-running-wait", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+				"ids": []string{childID},
+			}, tsEarlyS5),
+			testjsonl.CodexFunctionCallOutputJSON("call_wait",
+				"{\"status\":{\""+childID+"\":{\"running\":\"Still working\"}}}",
+				tsLate,
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 2, len(msgs))
+		assertToolResultEvents(t, msgs[1].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID:         "call_wait",
+			AgentID:           childID,
+			SubagentSessionID: "codex:" + childID,
+			Source:            "wait_output",
+			Status:            "running",
+			Content:           "Still working",
+		}})
 	})
 
 	t.Run("wait result events preserve JSON order for multiple agents", func(t *testing.T) {
@@ -1076,7 +1122,7 @@ func TestParseCodexSessionFrom_SystemMessageDoesNotRequireFullParse(t *testing.T
 	assert.False(t, endedAt.IsZero())
 }
 
-func TestParseCodexSessionFrom_RunningNotificationDoesNotRequireFullParse(t *testing.T) {
+func TestParseCodexSessionFrom_RunningNotificationRequiresFullParse(t *testing.T) {
 	t.Parallel()
 
 	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
@@ -1101,10 +1147,9 @@ func TestParseCodexSessionFrom_RunningNotificationDoesNotRequireFullParse(t *tes
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, len(newMsgs))
-	assert.False(t, endedAt.IsZero())
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 1, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full parse")
 }
 
 func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(t *testing.T) {

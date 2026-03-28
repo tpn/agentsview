@@ -902,6 +902,9 @@ func codexTerminalSubagentEvent(status gjson.Result) (string, string) {
 	if text := strings.TrimSpace(status.Get("errored").Str); text != "" {
 		return "errored", text
 	}
+	if text := strings.TrimSpace(status.Get("running").Str); text != "" {
+		return "running", text
+	}
 	return "", ""
 }
 
