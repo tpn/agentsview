@@ -271,9 +271,15 @@ make dev            # run Go server in dev mode
 make frontend-dev   # run Vite dev server (use alongside make dev)
 make desktop-dev    # run Tauri desktop app in dev mode
 make test           # Go tests (CGO_ENABLED=1 -tags fts5)
-make lint           # golangci-lint
+make lint           # golangci-lint (auto-fix)
 make e2e            # Playwright E2E tests
+make install-hooks  # install pre-commit hooks via prek
 ```
+
+Pre-commit hooks are managed with [prek](https://github.com/j178/prek).
+Run `brew install prek && make install-hooks` after cloning. The hook
+runs `make lint` on every commit, auto-fixing formatting issues. If the
+hook rewrites files, re-stage and re-commit.
 
 ## Desktop Development
 
