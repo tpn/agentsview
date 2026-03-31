@@ -320,7 +320,8 @@ func (s *Store) GetAnalyticsSummary(
 	}
 
 	query := `SELECT id, ` + pgDateCol +
-		`, message_count, agent, project
+		`, message_count, agent, project,
+		total_output_tokens, has_total_output_tokens
 		FROM sessions WHERE ` + where +
 		` ORDER BY message_count ASC`
 
@@ -336,10 +337,12 @@ func (s *Store) GetAnalyticsSummary(
 	defer rows.Close()
 
 	type sessionRow struct {
-		date     string
-		messages int
-		agent    string
-		project  string
+		date         string
+		messages     int
+		agent        string
+		project      string
+		outputTokens int
+		hasTokens    bool
 	}
 
 	var all []sessionRow
@@ -348,8 +351,11 @@ func (s *Store) GetAnalyticsSummary(
 		var ts *time.Time
 		var mc int
 		var agent, project string
+		var outputTokens int
+		var hasTokens bool
 		if err := rows.Scan(
 			&id, &ts, &mc, &agent, &project,
+			&outputTokens, &hasTokens,
 		); err != nil {
 			return db.AnalyticsSummary{},
 				fmt.Errorf(
@@ -364,8 +370,12 @@ func (s *Store) GetAnalyticsSummary(
 			continue
 		}
 		all = append(all, sessionRow{
-			date: date, messages: mc,
-			agent: agent, project: project,
+			date:         date,
+			messages:     mc,
+			agent:        agent,
+			project:      project,
+			outputTokens: outputTokens,
+			hasTokens:    hasTokens,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -389,6 +399,10 @@ func (s *Store) GetAnalyticsSummary(
 	for _, r := range all {
 		summary.TotalSessions++
 		summary.TotalMessages += r.messages
+		if r.hasTokens {
+			summary.TotalOutputTokens += r.outputTokens
+			summary.TokenReportingSessions++
+		}
 		days[r.date] = true
 		projects[r.project] += r.messages
 		msgCounts = append(msgCounts, r.messages)
@@ -735,7 +749,8 @@ func (s *Store) GetAnalyticsHeatmap(
 	}
 
 	query := `SELECT id, ` + pgDateCol +
-		`, message_count
+		`, message_count, total_output_tokens,
+		has_total_output_tokens
 		FROM sessions WHERE ` + where
 
 	rows, err := s.pg.QueryContext(
@@ -751,12 +766,16 @@ func (s *Store) GetAnalyticsHeatmap(
 
 	dayCounts := make(map[string]int)
 	daySessions := make(map[string]int)
+	dayOutputTokens := make(map[string]int)
 
 	for rows.Next() {
 		var id string
 		var ts *time.Time
-		var mc int
-		if err := rows.Scan(&id, &ts, &mc); err != nil {
+		var mc, outputTokens int
+		var hasTokens bool
+		if err := rows.Scan(
+			&id, &ts, &mc, &outputTokens, &hasTokens,
+		); err != nil {
 			return db.HeatmapResponse{},
 				fmt.Errorf(
 					"scanning heatmap row: %w", err,
@@ -771,6 +790,9 @@ func (s *Store) GetAnalyticsHeatmap(
 		}
 		dayCounts[date] += mc
 		daySessions[date]++
+		if hasTokens {
+			dayOutputTokens[date] += outputTokens
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return db.HeatmapResponse{},
@@ -782,6 +804,8 @@ func (s *Store) GetAnalyticsHeatmap(
 	source := dayCounts
 	if metric == "sessions" {
 		source = daySessions
+	} else if metric == "output_tokens" {
+		source = dayOutputTokens
 	}
 
 	entriesFrom := clampFrom(f.From, f.To)
@@ -1932,13 +1956,16 @@ func (s *Store) GetAnalyticsTopSessions(
 	}
 
 	needsGoSort := metric == "duration"
-	if metric != "duration" && metric != "messages" {
-		metric = "messages"
-	}
 	orderExpr := "message_count DESC, id ASC"
-	if metric == "duration" {
+	switch metric {
+	case "output_tokens":
+		where += " AND has_total_output_tokens = TRUE"
+		orderExpr = "total_output_tokens DESC, id ASC"
+	case "duration":
 		where += " AND started_at IS NOT NULL" +
 			" AND ended_at IS NOT NULL"
+	default:
+		metric = "messages"
 	}
 
 	limitClause := " LIMIT 1000"
@@ -1947,6 +1974,7 @@ func (s *Store) GetAnalyticsTopSessions(
 	}
 	query := `SELECT id, ` + pgDateCol + `, project,
 		first_message, message_count,
+		total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
 			AS duration_sec
 		FROM sessions WHERE ` + where +
@@ -1968,11 +1996,11 @@ func (s *Store) GetAnalyticsTopSessions(
 		var id, project string
 		var ts *time.Time
 		var firstMsg *string
-		var mc int
+		var mc, outputTokens int
 		var durationSec *float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
-			&mc, &durationSec,
+			&mc, &outputTokens, &durationSec,
 		); err != nil {
 			return db.TopSessionsResponse{},
 				fmt.Errorf(
@@ -1997,6 +2025,7 @@ func (s *Store) GetAnalyticsTopSessions(
 			Project:      project,
 			FirstMessage: firstMsg,
 			MessageCount: mc,
+			OutputTokens: outputTokens,
 			DurationMin:  durMin,
 		})
 	}

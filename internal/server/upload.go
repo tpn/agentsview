@@ -108,19 +108,24 @@ func (s *Server) saveSessionToDB(
 	sess parser.ParsedSession,
 	msgs []parser.ParsedMessage,
 ) error {
+	hasTotal, hasPeak := sess.TokenCoverage(msgs)
 	dbSess := db.Session{
-		ID:               sess.ID,
-		Project:          sess.Project,
-		Machine:          sess.Machine,
-		Agent:            string(sess.Agent),
-		MessageCount:     sess.MessageCount,
-		UserMessageCount: sess.UserMessageCount,
-		ParentSessionID:  strPtr(sess.ParentSessionID),
-		RelationshipType: string(sess.RelationshipType),
-		FilePath:         strPtr(sess.File.Path),
-		FileSize:         int64Ptr(sess.File.Size),
-		FileMtime:        int64Ptr(sess.File.Mtime),
-		FileHash:         strPtr(sess.File.Hash),
+		ID:                   sess.ID,
+		Project:              sess.Project,
+		Machine:              sess.Machine,
+		Agent:                string(sess.Agent),
+		MessageCount:         sess.MessageCount,
+		UserMessageCount:     sess.UserMessageCount,
+		ParentSessionID:      strPtr(sess.ParentSessionID),
+		RelationshipType:     string(sess.RelationshipType),
+		TotalOutputTokens:    sess.TotalOutputTokens,
+		PeakContextTokens:    sess.PeakContextTokens,
+		HasTotalOutputTokens: hasTotal,
+		HasPeakContextTokens: hasPeak,
+		FilePath:             strPtr(sess.File.Path),
+		FileSize:             int64Ptr(sess.File.Size),
+		FileMtime:            int64Ptr(sess.File.Mtime),
+		FileHash:             strPtr(sess.File.Hash),
 	}
 	if sess.FirstMessage != "" {
 		dbSess.FirstMessage = &sess.FirstMessage
@@ -141,15 +146,22 @@ func (s *Server) saveSessionToDB(
 
 	dbMsgs := make([]db.Message, len(msgs))
 	for i, m := range msgs {
+		hasCtx, hasOut := m.TokenPresence()
 		dbMsgs[i] = db.Message{
-			SessionID:     sess.ID,
-			Ordinal:       m.Ordinal,
-			Role:          string(m.Role),
-			Content:       m.Content,
-			Timestamp:     timeutil.Format(m.Timestamp),
-			HasThinking:   m.HasThinking,
-			HasToolUse:    m.HasToolUse,
-			ContentLength: m.ContentLength,
+			SessionID:        sess.ID,
+			Ordinal:          m.Ordinal,
+			Role:             string(m.Role),
+			Content:          m.Content,
+			Timestamp:        timeutil.Format(m.Timestamp),
+			HasThinking:      m.HasThinking,
+			HasToolUse:       m.HasToolUse,
+			ContentLength:    m.ContentLength,
+			Model:            m.Model,
+			TokenUsage:       m.TokenUsage,
+			ContextTokens:    m.ContextTokens,
+			OutputTokens:     m.OutputTokens,
+			HasContextTokens: hasCtx,
+			HasOutputTokens:  hasOut,
 		}
 	}
 

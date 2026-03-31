@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
 
   const CELL_SIZE = 16;
   const CELL_GAP = 2;
@@ -39,6 +40,17 @@
     return colors[level] ?? colors[0]!;
   }
 
+  function metricLabel(metric: HeatmapMetric): string {
+    switch (metric) {
+      case "sessions":
+        return "Sessions";
+      case "output_tokens":
+        return "Output Tokens";
+      default:
+        return "Messages";
+    }
+  }
+
   let tooltip = $state<{
     x: number;
     y: number;
@@ -61,7 +73,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${label}: ${cell.value.toLocaleString()} ${analytics.metric}`,
+      text: `${label}: ${cell.value.toLocaleString()} ${metricLabel(analytics.metric)}`,
     };
   }
 
@@ -121,6 +133,10 @@
     grid.cols.length * CELL_STEP + LABEL_WIDTH + 4,
   );
   const svgHeight = 7 * CELL_STEP + HEADER_HEIGHT + 4;
+  const supportsOutputTokens = $derived(
+    analytics.summary?.total_output_tokens !== undefined &&
+      analytics.summary?.token_reporting_sessions !== undefined,
+  );
 </script>
 
 <div class="heatmap-container">
@@ -141,6 +157,15 @@
       >
         Sessions
       </button>
+      {#if supportsOutputTokens}
+        <button
+          class="toggle-btn"
+          class:active={analytics.metric === "output_tokens"}
+          onclick={() => analytics.setMetric("output_tokens")}
+        >
+          Output Tokens
+        </button>
+      {/if}
     </div>
   </div>
 

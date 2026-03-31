@@ -207,6 +207,8 @@ func TestParseKimiSession_MultipleStatusUpdates(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, 225, sess.TotalOutputTokens)
 	assert.Equal(t, 8000, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
 }
 
 func TestParseKimiSession_StatusUpdate(t *testing.T) {
@@ -228,6 +230,31 @@ func TestParseKimiSession_StatusUpdate(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, 42, sess.TotalOutputTokens)
 	assert.Equal(t, 5000, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+}
+
+func TestParseKimiSession_ZeroValuedStatusUpdatePreservesCoverage(t *testing.T) {
+	path := writeKimiWireJSONL(t,
+		"proj-zero", "sess-zero",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi"}}}`,
+			`{"timestamp": 1704067201.5, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 0, "token_usage": {"output": 0}}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, _, err := ParseKimiSession(
+		path, "testproj", "local",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 0, sess.TotalOutputTokens)
+	assert.Equal(t, 0, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
 }
 
 func TestParseKimiSession_NoProject(t *testing.T) {

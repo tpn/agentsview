@@ -53,11 +53,24 @@ function buildTableSection<T>(
 function buildSummarySection(
   summary: AnalyticsSummary,
 ): string {
+  const outputTokens =
+    summary.total_output_tokens === undefined
+      ? ""
+      : summary.total_output_tokens;
+  const reportingSessions =
+    summary.token_reporting_sessions === undefined
+      ? ""
+      : summary.token_reporting_sessions;
   const lines = [
     "Summary",
     row(["Metric", "Value"]),
     row(["Sessions", summary.total_sessions]),
     row(["Messages", summary.total_messages]),
+    row(["Output Tokens", outputTokens]),
+    row([
+      "Token Reporting Sessions",
+      reportingSessions,
+    ]),
     row(["Active Projects", summary.active_projects]),
     row(["Active Days", summary.active_days]),
     row(["Avg Messages/Session", summary.avg_messages]),

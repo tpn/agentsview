@@ -15,12 +15,15 @@ const basePath = "/api/v1/analytics/"
 
 // seedStats holds expected values after seeding the database.
 type seedStats struct {
-	TotalSessions  int
-	TotalMessages  int
-	ActiveProjects int
-	TotalToolCalls int
-	Agents         int
-	ActiveDays     int
+	TotalSessions          int
+	TotalMessages          int
+	ActiveProjects         int
+	TotalToolCalls         int
+	Agents                 int
+	ActiveDays             int
+	TotalOutputTokens      int
+	TokenReportingSessions int
+	TopSessionOutputTokens int
 }
 
 // seedAnalyticsEnv populates the test env with sessions and
@@ -89,6 +92,58 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 	return stats
 }
 
+func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
+	t.Helper()
+
+	type entry struct {
+		id, project, agent, started string
+		msgs, outputTokens          int
+		hasTokens                   bool
+	}
+
+	entries := []entry{
+		{"tok-01", "alpha", "claude", "2024-06-01T09:00:00Z", 12, 9000, true},
+		{"tok-02", "alpha", "codex", "2024-06-01T10:00:00Z", 11, 7000, true},
+		{"tok-03", "beta", "claude", "2024-06-01T11:00:00Z", 10, 6000, true},
+		{"tok-04", "beta", "codex", "2024-06-01T12:00:00Z", 9, 5000, true},
+		{"tok-05", "gamma", "claude", "2024-06-02T09:00:00Z", 8, 4000, true},
+		{"tok-06", "gamma", "codex", "2024-06-02T10:00:00Z", 7, 3000, true},
+		{"tok-07", "delta", "claude", "2024-06-02T11:00:00Z", 6, 2000, true},
+		{"tok-08", "delta", "codex", "2024-06-02T12:00:00Z", 5, 1500, true},
+		{"tok-09", "epsilon", "claude", "2024-06-03T09:00:00Z", 4, 1200, true},
+		{"tok-10", "epsilon", "codex", "2024-06-03T10:00:00Z", 3, 1100, true},
+		{"tok-11", "zeta", "claude", "2024-06-03T11:00:00Z", 2, 1000, true},
+		{"tok-12", "zeta", "codex", "2024-06-03T12:00:00Z", 2, 200, true},
+		{"tok-missing", "omega", "claude", "2024-06-03T13:00:00Z", 40, 0, false},
+	}
+
+	var stats seedStats
+	for _, s := range entries {
+		stats.TotalSessions++
+		stats.TotalMessages += s.msgs
+		te.seedSession(t, s.id, s.project, s.msgs,
+			func(sess *db.Session) {
+				sess.Agent = s.agent
+				sess.StartedAt = &s.started
+				sess.EndedAt = &s.started
+				sess.FirstMessage = dbtest.Ptr("Token seeded")
+				sess.TotalOutputTokens = s.outputTokens
+				sess.HasTotalOutputTokens = s.hasTokens
+			},
+		)
+		te.seedMessages(t, s.id, s.msgs)
+		if s.hasTokens {
+			stats.TotalOutputTokens += s.outputTokens
+			stats.TokenReportingSessions++
+			if s.outputTokens > stats.TopSessionOutputTokens {
+				stats.TopSessionOutputTokens = s.outputTokens
+			}
+		}
+	}
+
+	return stats
+}
+
 // buildPathURL constructs an API URL for a given full path and parameters.
 func buildPathURL(fullPath string, params map[string]string) string {
 	u, _ := url.Parse(fullPath)
@@ -151,6 +206,22 @@ func TestAnalyticsSummary(t *testing.T) {
 		w := te.get(t, buildURL("summary", map[string]string{"timezone": "Fake/Zone"}))
 		assertStatus(t, w, http.StatusBadRequest)
 	})
+}
+
+func TestAnalyticsSummary_OutputTokenCoverage(t *testing.T) {
+	te := setup(t)
+	stats := seedAnalyticsTokenEnv(t, te)
+
+	w := te.get(t, buildURLWithRange("summary", map[string]string{"timezone": "UTC"}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.AnalyticsSummary](t, w)
+	if resp.TotalOutputTokens != stats.TotalOutputTokens {
+		t.Errorf("TotalOutputTokens = %d, want %d", resp.TotalOutputTokens, stats.TotalOutputTokens)
+	}
+	if resp.TokenReportingSessions != stats.TokenReportingSessions {
+		t.Errorf("TokenReportingSessions = %d, want %d", resp.TokenReportingSessions, stats.TokenReportingSessions)
+	}
 }
 
 func TestAnalyticsSummary_DateValidation(t *testing.T) {
@@ -518,6 +589,30 @@ func TestAnalyticsHeatmap(t *testing.T) {
 	})
 }
 
+func TestAnalyticsHeatmap_OutputTokens(t *testing.T) {
+	te := setup(t)
+	stats := seedAnalyticsTokenEnv(t, te)
+
+	w := te.get(t, buildURLWithRange("heatmap", map[string]string{
+		"timezone": "UTC",
+		"metric":   "output_tokens",
+	}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.HeatmapResponse](t, w)
+	if resp.Metric != "output_tokens" {
+		t.Fatalf("Metric = %q, want %q", resp.Metric, "output_tokens")
+	}
+
+	total := 0
+	for _, e := range resp.Entries {
+		total += e.Value
+	}
+	if total != stats.TotalOutputTokens {
+		t.Errorf("total output tokens = %d, want %d", total, stats.TotalOutputTokens)
+	}
+}
+
 func TestAnalyticsProjects(t *testing.T) {
 	te := setup(t)
 	stats := seedAnalyticsEnv(t, te)
@@ -692,6 +787,28 @@ func TestAnalyticsTopSessions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
+	te := setup(t)
+	stats := seedAnalyticsTokenEnv(t, te)
+
+	w := te.get(t, buildURLWithRange("top-sessions", map[string]string{
+		"timezone": "UTC",
+		"metric":   "output_tokens",
+	}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.TopSessionsResponse](t, w)
+	if resp.Metric != "output_tokens" {
+		t.Fatalf("Metric = %q, want %q", resp.Metric, "output_tokens")
+	}
+	if len(resp.Sessions) == 0 {
+		t.Fatal("Sessions is empty")
+	}
+	if resp.Sessions[0].OutputTokens != stats.TopSessionOutputTokens {
+		t.Errorf("Sessions[0].OutputTokens = %d, want %d", resp.Sessions[0].OutputTokens, stats.TopSessionOutputTokens)
 	}
 }
 

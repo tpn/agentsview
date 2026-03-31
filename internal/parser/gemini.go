@@ -117,45 +117,40 @@ func ParseGeminiSession(
 				TokenUsage:    tokenUsage,
 				ContextTokens: tok.Input + tok.Cached,
 				OutputTokens:  tok.Output,
+				HasContextTokens: tokResult.Get("input").Exists() ||
+					tokResult.Get("cached").Exists(),
+				HasOutputTokens:    tokResult.Get("output").Exists(),
+				tokenPresenceKnown: true,
 			})
 			ordinal++
 			return true
 		},
 	)
 
-	var (
-		userCount   int
-		totalOut    int
-		peakContext int
-	)
+	var userCount int
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {
 			userCount++
 		}
-		totalOut += m.OutputTokens
-		if m.ContextTokens > peakContext {
-			peakContext = m.ContextTokens
-		}
 	}
 
 	sess := &ParsedSession{
-		ID:                "gemini:" + sessionID,
-		Project:           project,
-		Machine:           machine,
-		Agent:             AgentGemini,
-		FirstMessage:      firstMessage,
-		StartedAt:         startTime,
-		EndedAt:           lastUpdated,
-		MessageCount:      len(messages),
-		UserMessageCount:  userCount,
-		TotalOutputTokens: totalOut,
-		PeakContextTokens: peakContext,
+		ID:               "gemini:" + sessionID,
+		Project:          project,
+		Machine:          machine,
+		Agent:            AgentGemini,
+		FirstMessage:     firstMessage,
+		StartedAt:        startTime,
+		EndedAt:          lastUpdated,
+		MessageCount:     len(messages),
+		UserMessageCount: userCount,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
+	accumulateMessageTokenUsage(sess, messages)
 
 	return sess, messages, nil
 }

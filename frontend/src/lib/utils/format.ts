@@ -68,6 +68,24 @@ export function formatTokenCount(n: number): string {
   return m % 1 === 0 ? `${Math.floor(m)}M` : `${m}M`;
 }
 
+export function formatTokenUsage(
+  contextTokens: number,
+  hasContextTokens: boolean,
+  outputTokens: number,
+  hasOutputTokens: boolean,
+): string | null {
+  if (!hasContextTokens && !hasOutputTokens) return null;
+
+  const contextLabel = hasContextTokens
+    ? `${formatTokenCount(contextTokens)} ctx`
+    : "— ctx";
+  const outputLabel = hasOutputTokens
+    ? `${formatTokenCount(outputTokens)} out`
+    : "— out";
+
+  return `${contextLabel} / ${outputLabel}`;
+}
+
 let nonceCounter = 0;
 
 /** Reset the nonce counter. Exported for testing only. */

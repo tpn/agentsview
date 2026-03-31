@@ -26,6 +26,8 @@ describe("generateAnalyticsCSV", () => {
     data.summary = {
       total_sessions: 10,
       total_messages: 200,
+      total_output_tokens: 42000,
+      token_reporting_sessions: 12,
       active_projects: 3,
       active_days: 15,
       avg_messages: 20,
@@ -43,6 +45,10 @@ describe("generateAnalyticsCSV", () => {
     expect(lines[1]).toBe("Metric,Value");
     expect(lines[2]).toBe("Sessions,10");
     expect(lines[3]).toBe("Messages,200");
+    expect(lines).toContainEqual("Output Tokens,42000");
+    expect(lines).toContainEqual(
+      "Token Reporting Sessions,12",
+    );
     expect(lines).toContainEqual("Concentration,45.6%");
   });
 
@@ -137,6 +143,8 @@ describe("generateAnalyticsCSV", () => {
     data.summary = {
       total_sessions: 1,
       total_messages: 1,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
       active_projects: 1,
       active_days: 1,
       avg_messages: 1,
@@ -165,6 +173,8 @@ describe("generateAnalyticsCSV", () => {
     data.summary = {
       total_sessions: 1,
       total_messages: 1,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
       active_projects: 1,
       active_days: 1,
       avg_messages: 1,
@@ -186,6 +196,8 @@ describe("generateAnalyticsCSV", () => {
     data.summary = {
       total_sessions: 1,
       total_messages: 1,
+      total_output_tokens: 0,
+      token_reporting_sessions: 0,
       active_projects: 1,
       active_days: 1,
       avg_messages: 1,

@@ -2015,9 +2015,29 @@ func TestExportSession_HTMLContent(t *testing.T) {
 func TestUploadSession(t *testing.T) {
 	te := setup(t)
 
+	assistantWithUsage, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsEarlyS5,
+		"message": map[string]any{
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":                100,
+				"cache_creation_input_tokens": 200,
+				"cache_read_input_tokens":     200,
+				"output_tokens":               200,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hi!"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal assistant fixture: %v", err)
+	}
+
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "Hello upload").
-		AddClaudeAssistant(tsEarlyS5, "Hi!").
+		AddRaw(string(assistantWithUsage)).
 		String()
 
 	w := te.upload(t, "upload-test.jsonl", content,
@@ -2048,6 +2068,40 @@ func TestUploadSession(t *testing.T) {
 	}
 	if sess.Project != "myproj" {
 		t.Errorf("stored project = %q", sess.Project)
+	}
+	if !sess.HasTotalOutputTokens {
+		t.Error("stored HasTotalOutputTokens = false, want true")
+	}
+	if !sess.HasPeakContextTokens {
+		t.Error("stored HasPeakContextTokens = false, want true")
+	}
+	if sess.TotalOutputTokens != 200 {
+		t.Errorf("stored TotalOutputTokens = %d, want 200",
+			sess.TotalOutputTokens)
+	}
+	if sess.PeakContextTokens != 500 {
+		t.Errorf("stored PeakContextTokens = %d, want 500",
+			sess.PeakContextTokens)
+	}
+
+	msgs, err := te.db.GetMessages(context.Background(), "upload-test", 0, 10, true)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("message count = %d, want 2", len(msgs))
+	}
+	if !msgs[1].HasContextTokens {
+		t.Error("assistant HasContextTokens = false, want true")
+	}
+	if !msgs[1].HasOutputTokens {
+		t.Error("assistant HasOutputTokens = false, want true")
+	}
+	if msgs[1].OutputTokens != 200 {
+		t.Errorf("assistant OutputTokens = %d, want 200", msgs[1].OutputTokens)
+	}
+	if msgs[1].ContextTokens != 500 {
+		t.Errorf("assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
 	}
 }
 

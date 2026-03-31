@@ -36,6 +36,8 @@ function makeSummary(): AnalyticsSummary {
   return {
     total_sessions: 10,
     total_messages: 100,
+    total_output_tokens: 42000,
+    token_reporting_sessions: 8,
     active_projects: 3,
     active_days: 5,
     avg_messages: 10,
@@ -254,6 +256,24 @@ describe("AnalyticsStore heatmap uses full range", () => {
 
     expect(api.getAnalyticsHeatmap).toHaveBeenLastCalledWith(
       expect.objectContaining({ from: "2024-01-01", to: "2024-01-31" }),
+    );
+  });
+});
+
+describe("AnalyticsStore token metrics", () => {
+  it("passes output_tokens heatmap metric through to the API", () => {
+    analytics.setMetric("output_tokens");
+
+    expect(api.getAnalyticsHeatmap).toHaveBeenLastCalledWith(
+      expect.objectContaining({ metric: "output_tokens" }),
+    );
+  });
+
+  it("passes output_tokens top-session metric through to the API", () => {
+    analytics.setTopMetric("output_tokens");
+
+    expect(api.getAnalyticsTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({ metric: "output_tokens" }),
     );
   });
 });

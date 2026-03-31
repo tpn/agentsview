@@ -25,6 +25,8 @@ export interface Session {
   file_mtime?: number;
   total_output_tokens: number;
   peak_context_tokens: number;
+  has_total_output_tokens?: boolean;
+  has_peak_context_tokens?: boolean;
   created_at: string;
 }
 
@@ -82,6 +84,8 @@ export interface Message {
   token_usage?: Record<string, number | boolean> | null;
   context_tokens: number;
   output_tokens: number;
+  has_context_tokens?: boolean;
+  has_output_tokens?: boolean;
   tool_calls?: ToolCall[];
   is_system: boolean;
 }

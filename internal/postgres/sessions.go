@@ -29,7 +29,10 @@ type Store struct {
 const pgSessionCols = `id, project, machine, agent,
 	first_message, display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
-	parent_session_id, relationship_type, deleted_at`
+	parent_session_id, relationship_type,
+	total_output_tokens, peak_context_tokens,
+	has_total_output_tokens, has_peak_context_tokens,
+	deleted_at`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -57,6 +60,8 @@ func scanPGSession(
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
+		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
 		&deletedAt,
 	)
 	if err != nil {

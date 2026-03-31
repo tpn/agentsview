@@ -2,6 +2,7 @@
   import { analytics } from "../../stores/analytics.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { formatTokenCount } from "../../utils/format.js";
 
   function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
@@ -23,6 +24,11 @@
     }
     router.navigateToSession(id);
   }
+
+  const supportsOutputTokens = $derived(
+    analytics.summary?.total_output_tokens !== undefined &&
+      analytics.summary?.token_reporting_sessions !== undefined,
+  );
 </script>
 
 <div class="top-sessions-container">
@@ -43,6 +49,15 @@
       >
         By Duration
       </button>
+      {#if supportsOutputTokens}
+        <button
+          class="toggle-btn"
+          class:active={analytics.topMetric === "output_tokens"}
+          onclick={() => analytics.setTopMetric("output_tokens")}
+        >
+          By Output Tokens
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -79,6 +94,8 @@
           <span class="session-metric">
             {#if analytics.topMetric === "duration"}
               {formatDuration(session.duration_min)}
+            {:else if analytics.topMetric === "output_tokens"}
+              {formatTokenCount(session.output_tokens)}
             {:else}
               {session.message_count}
             {/if}

@@ -58,6 +58,8 @@ function makeMessage(ordinal: number): Message {
     token_usage: null,
     context_tokens: 0,
     output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
     is_system: false,
   };
 }

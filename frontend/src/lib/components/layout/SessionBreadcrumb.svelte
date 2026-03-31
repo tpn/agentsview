@@ -10,7 +10,7 @@
   } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { agentColor } from "../../utils/agents.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatTokenUsage } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
@@ -71,6 +71,27 @@
   });
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
+  let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
+  let sessionHasContextTokens = $derived(
+    session
+      ? (session.has_peak_context_tokens ?? session.peak_context_tokens > 0)
+      : false,
+  );
+  let sessionHasOutputTokens = $derived(
+    session
+      ? (session.has_total_output_tokens ?? session.total_output_tokens > 0)
+      : false,
+  );
+  let sessionTokenSummary = $derived(
+    session
+      ? formatTokenUsage(
+          sessionContextTokens,
+          sessionHasContextTokens,
+          sessionOutputTokens,
+          sessionHasOutputTokens,
+        )
+      : null,
+  );
 
   let mainModel = $derived(
     messagesStore.sessionId === session?.id
@@ -480,9 +501,15 @@
             : rawId.slice(0, 8)}
         </button>
       {/if}
-      {#if sessionContextTokens + (session?.total_output_tokens ?? 0) > 0}
-        <span class="token-badge">
-          {formatTokenCount(sessionContextTokens)} ctx / {formatTokenCount(session?.total_output_tokens ?? 0)} out
+      {#if sessionTokenSummary}
+        <span class="token-badge token-badge--desktop">
+          {sessionTokenSummary}
+        </span>
+        <span
+          class="token-badge token-badge--mobile"
+          title={sessionTokenSummary}
+        >
+          {sessionTokenSummary}
         </span>
       {/if}
       {#if mainModel}
@@ -773,6 +800,11 @@
     flex-shrink: 0;
   }
 
+  .token-badge--mobile {
+    display: none;
+    white-space: nowrap;
+  }
+
   .model-badge {
     font-size: 10px;
     color: var(--text-muted);
@@ -940,8 +972,17 @@
       display: none;
     }
 
-    .token-badge {
+    .token-badge--desktop {
       display: none;
+    }
+
+    .token-badge--mobile {
+      display: inline-flex;
+      font-size: 9px;
+      padding: 1px 4px;
+      max-width: 110px;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .session-id {

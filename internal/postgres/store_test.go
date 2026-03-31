@@ -65,6 +65,61 @@ func ensureStoreSchema(t *testing.T, pgURL string) {
 	}
 }
 
+func ensureAnalyticsTokenStoreSchema(
+	t *testing.T, pgURL string,
+) {
+	t.Helper()
+	pg, err := Open(pgURL, testSchema, true)
+	if err != nil {
+		t.Fatalf("connecting to pg: %v", err)
+	}
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+		DROP SCHEMA IF EXISTS ` + testSchema + ` CASCADE;
+	`)
+	if err != nil {
+		t.Fatalf("dropping schema: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, pg, testSchema); err != nil {
+		t.Fatalf("creating schema: %v", err)
+	}
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions (
+			id, machine, project, agent, first_message,
+			started_at, ended_at, message_count,
+			user_message_count, total_output_tokens,
+			has_total_output_tokens
+		) VALUES
+			('pg-token-001', 'test-machine', 'proj-a', 'claude',
+			 'largest token session',
+			 '2026-03-12T10:00:00Z'::timestamptz,
+			 '2026-03-12T10:30:00Z'::timestamptz,
+			 12, 6, 900, TRUE),
+			('pg-token-002', 'test-machine', 'proj-a', 'codex',
+			 'second token session',
+			 '2026-03-12T12:00:00Z'::timestamptz,
+			 '2026-03-12T12:15:00Z'::timestamptz,
+			 8, 4, 600, TRUE),
+			('pg-token-003', 'test-machine', 'proj-b', 'claude',
+			 'third token session',
+			 '2026-03-13T09:00:00Z'::timestamptz,
+			 '2026-03-13T09:10:00Z'::timestamptz,
+			 5, 3, 300, TRUE),
+			('pg-token-missing', 'test-machine', 'proj-c', 'claude',
+			 'missing token coverage',
+			 '2026-03-13T11:00:00Z'::timestamptz,
+			 '2026-03-13T11:20:00Z'::timestamptz,
+			 9, 5, 0, FALSE)
+	`)
+	if err != nil {
+		t.Fatalf("inserting analytics token sessions: %v", err)
+	}
+}
+
 func TestNewStore(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
@@ -635,6 +690,146 @@ func TestStoreGetSessionActivity_FractionalTimestamps(
 			"second bucket user=%d, want 1",
 			second.UserCount,
 		)
+	}
+}
+
+func TestStoreAnalyticsSummaryOutputTokenCoverage(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	ensureAnalyticsTokenStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	summary, err := store.GetAnalyticsSummary(
+		context.Background(),
+		db.AnalyticsFilter{
+			From: "2026-03-12",
+			To:   "2026-03-13",
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetAnalyticsSummary: %v", err)
+	}
+
+	if summary.TotalOutputTokens != 1800 {
+		t.Errorf(
+			"TotalOutputTokens = %d, want 1800",
+			summary.TotalOutputTokens,
+		)
+	}
+	if summary.TokenReportingSessions != 3 {
+		t.Errorf(
+			"TokenReportingSessions = %d, want 3",
+			summary.TokenReportingSessions,
+		)
+	}
+}
+
+func TestStoreAnalyticsHeatmapOutputTokens(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureAnalyticsTokenStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	heatmap, err := store.GetAnalyticsHeatmap(
+		context.Background(),
+		db.AnalyticsFilter{
+			From: "2026-03-12",
+			To:   "2026-03-13",
+		},
+		"output_tokens",
+	)
+	if err != nil {
+		t.Fatalf("GetAnalyticsHeatmap: %v", err)
+	}
+
+	if heatmap.Metric != "output_tokens" {
+		t.Fatalf(
+			"Metric = %q, want %q",
+			heatmap.Metric, "output_tokens",
+		)
+	}
+	if len(heatmap.Entries) != 2 {
+		t.Fatalf(
+			"len(Entries) = %d, want 2",
+			len(heatmap.Entries),
+		)
+	}
+	if heatmap.Entries[0].Date != "2026-03-12" ||
+		heatmap.Entries[0].Value != 1500 {
+		t.Errorf(
+			"Entries[0] = %+v, want date 2026-03-12 value 1500",
+			heatmap.Entries[0],
+		)
+	}
+	if heatmap.Entries[1].Date != "2026-03-13" ||
+		heatmap.Entries[1].Value != 300 {
+		t.Errorf(
+			"Entries[1] = %+v, want date 2026-03-13 value 300",
+			heatmap.Entries[1],
+		)
+	}
+}
+
+func TestStoreAnalyticsTopSessionsOutputTokens(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	ensureAnalyticsTokenStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	top, err := store.GetAnalyticsTopSessions(
+		context.Background(),
+		db.AnalyticsFilter{
+			From: "2026-03-12",
+			To:   "2026-03-13",
+		},
+		"output_tokens",
+	)
+	if err != nil {
+		t.Fatalf("GetAnalyticsTopSessions: %v", err)
+	}
+
+	if top.Metric != "output_tokens" {
+		t.Fatalf(
+			"Metric = %q, want %q",
+			top.Metric, "output_tokens",
+		)
+	}
+	if len(top.Sessions) != 3 {
+		t.Fatalf(
+			"len(Sessions) = %d, want 3",
+			len(top.Sessions),
+		)
+	}
+	if top.Sessions[0].ID != "pg-token-001" ||
+		top.Sessions[0].OutputTokens != 900 {
+		t.Errorf(
+			"Sessions[0] = %+v, want pg-token-001 with 900 output tokens",
+			top.Sessions[0],
+		)
+	}
+	for _, session := range top.Sessions {
+		if session.ID == "pg-token-missing" {
+			t.Fatalf(
+				"session without token coverage was included: %+v",
+				session,
+			)
+		}
 	}
 }
 

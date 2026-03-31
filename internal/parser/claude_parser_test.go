@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -527,6 +528,25 @@ func TestParseClaudeSessionFrom_LinearUUID(
 }
 
 func TestParseClaudeSession_TokenUsage(t *testing.T) {
+	t.Run("explicit parser presence beats fallback inference", func(t *testing.T) {
+		msg := ParsedMessage{
+			TokenUsage:         json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+			tokenPresenceKnown: true,
+		}
+		msgHasCtx, msgHasOut := msg.TokenPresence()
+		assert.False(t, msgHasCtx)
+		assert.False(t, msgHasOut)
+
+		sess := ParsedSession{
+			TotalOutputTokens:           50,
+			PeakContextTokens:           100,
+			aggregateTokenPresenceKnown: true,
+		}
+		sessHasTotal, sessHasPeak := sess.AggregateTokenPresence()
+		assert.False(t, sessHasTotal)
+		assert.False(t, sessHasPeak)
+	})
+
 	t.Run("per-message token fields from fixture", func(t *testing.T) {
 		content := loadFixture(t, "claude/valid_session.jsonl")
 		_, msgs := runClaudeParserTest(t, "test.jsonl", content)
@@ -535,21 +555,29 @@ func TestParseClaudeSession_TokenUsage(t *testing.T) {
 		// msgs[2] is user (no usage), msgs[3] is assistant (has usage).
 		assert.Equal(t, 0, msgs[0].ContextTokens)
 		assert.Equal(t, 0, msgs[0].OutputTokens)
+		assert.False(t, msgs[0].HasContextTokens)
+		assert.False(t, msgs[0].HasOutputTokens)
 		assert.Empty(t, msgs[0].Model)
 		assert.Empty(t, msgs[0].TokenUsage)
 
 		// input=100, cache_creation=200, cache_read=300 -> context=600
 		assert.Equal(t, 600, msgs[1].ContextTokens)
 		assert.Equal(t, 50, msgs[1].OutputTokens)
+		assert.True(t, msgs[1].HasContextTokens)
+		assert.True(t, msgs[1].HasOutputTokens)
 		assert.Equal(t, "claude-sonnet-4-20250514", msgs[1].Model)
 		assert.Contains(t, string(msgs[1].TokenUsage), `"input_tokens":100`)
 
 		assert.Equal(t, 0, msgs[2].ContextTokens)
 		assert.Equal(t, 0, msgs[2].OutputTokens)
+		assert.False(t, msgs[2].HasContextTokens)
+		assert.False(t, msgs[2].HasOutputTokens)
 
 		// input=150, cache_creation=0, cache_read=500 -> context=650
 		assert.Equal(t, 650, msgs[3].ContextTokens)
 		assert.Equal(t, 75, msgs[3].OutputTokens)
+		assert.True(t, msgs[3].HasContextTokens)
+		assert.True(t, msgs[3].HasOutputTokens)
 		assert.Equal(t, "claude-sonnet-4-20250514", msgs[3].Model)
 		assert.Contains(t, string(msgs[3].TokenUsage), `"input_tokens":150`)
 	})
@@ -560,6 +588,8 @@ func TestParseClaudeSession_TokenUsage(t *testing.T) {
 
 		assert.Equal(t, 125, sess.TotalOutputTokens)
 		assert.Equal(t, 650, sess.PeakContextTokens)
+		assert.True(t, sess.HasTotalOutputTokens)
+		assert.True(t, sess.HasPeakContextTokens)
 	})
 
 	t.Run("messages without usage get zero values", func(t *testing.T) {
@@ -574,10 +604,44 @@ func TestParseClaudeSession_TokenUsage(t *testing.T) {
 		assert.Equal(t, 0, msgs[0].ContextTokens)
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.False(t, msgs[0].HasContextTokens)
+		assert.False(t, msgs[0].HasOutputTokens)
+		assert.False(t, msgs[1].HasContextTokens)
+		assert.False(t, msgs[1].HasOutputTokens)
 		assert.Empty(t, msgs[1].TokenUsage)
 
 		assert.Equal(t, 0, sess.TotalOutputTokens)
 		assert.Equal(t, 0, sess.PeakContextTokens)
+		assert.False(t, sess.HasTotalOutputTokens)
+		assert.False(t, sess.HasPeakContextTokens)
+	})
+
+	t.Run("zero-valued usage keys preserve coverage", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsZero),
+			`{"type":"assistant","timestamp":"`+tsZeroS1+`","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"still counted"}],"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}`,
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+
+		require.Equal(t, 2, len(msgs))
+		assert.Equal(t, 0, msgs[1].ContextTokens)
+		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.True(t, msgs[1].HasContextTokens)
+		assert.True(t, msgs[1].HasOutputTokens)
+		msgHasCtx, msgHasOut := msgs[1].TokenPresence()
+		assert.True(t, msgHasCtx)
+		assert.True(t, msgHasOut)
+
+		assert.Equal(t, 0, sess.TotalOutputTokens)
+		assert.Equal(t, 0, sess.PeakContextTokens)
+		assert.True(t, sess.HasTotalOutputTokens)
+		assert.True(t, sess.HasPeakContextTokens)
+		sessHasTotal, sessHasPeak := sess.AggregateTokenPresence()
+		assert.True(t, sessHasTotal)
+		assert.True(t, sessHasPeak)
+		coverageTotal, coveragePeak := sess.TokenCoverage(msgs)
+		assert.True(t, coverageTotal)
+		assert.True(t, coveragePeak)
 	})
 }
 

@@ -192,25 +192,35 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		// User messages have no tokens
 		assert.Equal(t, 0, msgs[0].ContextTokens)
 		assert.Equal(t, 0, msgs[0].OutputTokens)
+		assert.False(t, msgs[0].HasContextTokens)
+		assert.False(t, msgs[0].HasOutputTokens)
 		assert.Empty(t, msgs[0].TokenUsage)
 
 		// First assistant message (a1): input=1500, cached=100, output=200
 		assert.Equal(t, 1600, msgs[1].ContextTokens)
 		assert.Equal(t, 200, msgs[1].OutputTokens)
+		assert.True(t, msgs[1].HasContextTokens)
+		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
 
 		// Second user message has no tokens
 		assert.Equal(t, 0, msgs[2].ContextTokens)
 		assert.Equal(t, 0, msgs[2].OutputTokens)
+		assert.False(t, msgs[2].HasContextTokens)
+		assert.False(t, msgs[2].HasOutputTokens)
 
 		// Second assistant message (a2): input=2000, cached=50, output=300
 		assert.Equal(t, 2050, msgs[3].ContextTokens)
 		assert.Equal(t, 300, msgs[3].OutputTokens)
+		assert.True(t, msgs[3].HasContextTokens)
+		assert.True(t, msgs[3].HasOutputTokens)
 		assert.NotEmpty(t, msgs[3].TokenUsage)
 
 		// Session totals
 		assert.Equal(t, 500, sess.TotalOutputTokens)
 		assert.Equal(t, 2050, sess.PeakContextTokens)
+		assert.True(t, sess.HasTotalOutputTokens)
+		assert.True(t, sess.HasPeakContextTokens)
 	})
 
 	t.Run("messages without tokens get zero values", func(t *testing.T) {
@@ -227,8 +237,14 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.Equal(t, 0, msgs[0].ContextTokens)
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.False(t, msgs[0].HasContextTokens)
+		assert.False(t, msgs[0].HasOutputTokens)
+		assert.False(t, msgs[1].HasContextTokens)
+		assert.False(t, msgs[1].HasOutputTokens)
 		assert.Equal(t, 0, sess.TotalOutputTokens)
 		assert.Equal(t, 0, sess.PeakContextTokens)
+		assert.False(t, sess.HasTotalOutputTokens)
+		assert.False(t, sess.HasPeakContextTokens)
 	})
 
 	t.Run("tokens with programmatic fixture", func(t *testing.T) {
@@ -257,9 +273,54 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		require.Equal(t, 2, len(msgs))
 		assert.Equal(t, 5200, msgs[1].ContextTokens)
 		assert.Equal(t, 800, msgs[1].OutputTokens)
+		assert.True(t, msgs[1].HasContextTokens)
+		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
 		assert.Equal(t, 800, sess.TotalOutputTokens)
 		assert.Equal(t, 5200, sess.PeakContextTokens)
+		assert.True(t, sess.HasTotalOutputTokens)
+		assert.True(t, sess.HasPeakContextTokens)
+	})
+
+	t.Run("zero-valued token keys preserve coverage", func(t *testing.T) {
+		content := testjsonl.GeminiSessionJSON(
+			"sess-zero-explicit", "hash", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg("u1", tsEarly, "hello"),
+				{
+					"id":        "a1",
+					"timestamp": tsEarlyS5,
+					"type":      "gemini",
+					"content":   "still counted",
+					"tokens": map[string]int{
+						"input":  0,
+						"output": 0,
+						"cached": 0,
+					},
+				},
+			},
+		)
+		sess, msgs := runGeminiParserTest(t, content)
+
+		require.Equal(t, 2, len(msgs))
+		assert.Equal(t, 0, msgs[1].ContextTokens)
+		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.True(t, msgs[1].HasContextTokens)
+		assert.True(t, msgs[1].HasOutputTokens)
+		msgHasCtx, msgHasOut := msgs[1].TokenPresence()
+		assert.True(t, msgHasCtx)
+		assert.True(t, msgHasOut)
+
+		assert.Equal(t, 0, sess.TotalOutputTokens)
+		assert.Equal(t, 0, sess.PeakContextTokens)
+		assert.True(t, sess.HasTotalOutputTokens)
+		assert.True(t, sess.HasPeakContextTokens)
+		sessHasTotal, sessHasPeak := sess.AggregateTokenPresence()
+		assert.True(t, sessHasTotal)
+		assert.True(t, sessHasPeak)
+		coverageTotal, coveragePeak := sess.TokenCoverage(msgs)
+		assert.True(t, coverageTotal)
+		assert.True(t, coveragePeak)
 	})
 }
 

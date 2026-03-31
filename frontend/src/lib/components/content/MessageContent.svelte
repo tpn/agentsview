@@ -4,7 +4,10 @@
     parseContent,
     enrichSegments,
   } from "../../utils/content-parser.js";
-  import { formatTimestamp } from "../../utils/format.js";
+  import {
+    formatTimestamp,
+    formatTokenUsage,
+  } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
@@ -49,6 +52,23 @@
     if (isUser || !message.model || !mainModel) return "";
     return message.model !== mainModel ? message.model : "";
   });
+
+  let hasContextTokens = $derived(
+    message.has_context_tokens ?? message.context_tokens > 0,
+  );
+
+  let hasOutputTokens = $derived(
+    message.has_output_tokens ?? message.output_tokens > 0,
+  );
+
+  let tokenSummary = $derived(
+    formatTokenUsage(
+      message.context_tokens,
+      hasContextTokens,
+      message.output_tokens,
+      hasOutputTokens,
+    ),
+  );
 
   /** Resolve the session that owns this message, falling back to activeSession. */
   let owningSession = $derived(
@@ -212,14 +232,21 @@
     {#if pinFeedback}
       <span class="pin-feedback">{pinFeedback}</span>
     {/if}
-    <span class="timestamp">
-      {formatTimestamp(message.timestamp)}
-    </span>
-    {#if offMainModel}
-      <span class="message-model" title={offMainModel}>
-        {offMainModel}
+    <div class="header-meta">
+      {#if tokenSummary}
+        <span class="message-tokens">
+          {tokenSummary}
+        </span>
+      {/if}
+      <span class="timestamp">
+        {formatTimestamp(message.timestamp)}
       </span>
-    {/if}
+      {#if offMainModel}
+        <span class="message-model" title={offMainModel}>
+          {offMainModel}
+        </span>
+      {/if}
+    </div>
   </div>
 
   <div class="message-body">
@@ -310,7 +337,21 @@
   .timestamp {
     font-size: 12px;
     color: var(--text-muted);
+  }
+
+  .header-meta {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .message-tokens {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
   }
 
   .message-model {

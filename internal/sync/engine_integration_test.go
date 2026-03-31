@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -2879,9 +2880,26 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	origHash := *full.FileHash
 
 	// Append an assistant response.
-	appended := testjsonl.ClaudeAssistantJSON(
-		"world", tsZeroS5,
-	) + "\n"
+	appendedJSON, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsZeroS5,
+		"message": map[string]any{
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":                100,
+				"cache_creation_input_tokens": 200,
+				"cache_read_input_tokens":     200,
+				"output_tokens":               200,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "world"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal assistant fixture: %v", err)
+	}
+	appended := string(appendedJSON) + "\n"
 	f, err := os.OpenFile(
 		path, os.O_APPEND|os.O_WRONLY, 0o644,
 	)
@@ -2927,6 +2945,34 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 			"file_hash = %v, want %q (preserved)",
 			updated.FileHash, origHash,
 		)
+	}
+	if !updated.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = false, want true")
+	}
+	if !updated.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = false, want true")
+	}
+	if updated.TotalOutputTokens != 200 {
+		t.Errorf("TotalOutputTokens = %d, want 200",
+			updated.TotalOutputTokens)
+	}
+	if updated.PeakContextTokens != 500 {
+		t.Errorf("PeakContextTokens = %d, want 500",
+			updated.PeakContextTokens)
+	}
+	if !msgs[1].HasContextTokens {
+		t.Error("assistant HasContextTokens = false, want true")
+	}
+	if !msgs[1].HasOutputTokens {
+		t.Error("assistant HasOutputTokens = false, want true")
+	}
+	if msgs[1].OutputTokens != 200 {
+		t.Errorf("assistant OutputTokens = %d, want 200",
+			msgs[1].OutputTokens)
+	}
+	if msgs[1].ContextTokens != 500 {
+		t.Errorf("assistant ContextTokens = %d, want 500",
+			msgs[1].ContextTokens)
 	}
 }
 

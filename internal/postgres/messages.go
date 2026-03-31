@@ -30,7 +30,9 @@ func (s *Store) GetMessages(
 	query := fmt.Sprintf(`
 		SELECT session_id, ordinal, role, content,
 			timestamp, has_thinking, has_tool_use,
-			content_length, is_system
+			content_length, is_system, model, token_usage,
+			context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
 		FROM messages
 		WHERE session_id = $1 AND ordinal %s $2
 		ORDER BY ordinal %s
@@ -64,7 +66,9 @@ func (s *Store) GetAllMessages(
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, content,
 			timestamp, has_thinking, has_tool_use,
-			content_length, is_system
+			content_length, is_system, model, token_usage,
+			context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
 		FROM messages
 		WHERE session_id = $1
 		ORDER BY ordinal ASC`, sessionID)
@@ -515,10 +519,14 @@ func scanPGMessages(rows interface {
 	for rows.Next() {
 		var m db.Message
 		var ts *time.Time
+		var tokenUsage string
 		if err := rows.Scan(
 			&m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &ts, &m.HasThinking,
 			&m.HasToolUse, &m.ContentLength, &m.IsSystem,
+			&m.Model, &tokenUsage,
+			&m.ContextTokens, &m.OutputTokens,
+			&m.HasContextTokens, &m.HasOutputTokens,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning message: %w", err,
@@ -526,6 +534,9 @@ func scanPGMessages(rows interface {
 		}
 		if ts != nil {
 			m.Timestamp = FormatISO8601(*ts)
+		}
+		if tokenUsage != "" {
+			m.TokenUsage = []byte(tokenUsage)
 		}
 		msgs = append(msgs, m)
 	}

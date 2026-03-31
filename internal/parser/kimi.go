@@ -129,8 +129,10 @@ func ParseKimiSession(
 		hasToolUse      bool
 
 		// Track token usage from StatusUpdate.
-		totalOutputTokens int
-		peakContextTokens int
+		totalOutputTokens    int
+		peakContextTokens    int
+		hasTotalOutputTokens bool
+		hasPeakContextTokens bool
 
 		// Current record timestamp and pending assistant
 		// turn timestamp (latest seen).
@@ -320,9 +322,11 @@ func ParseKimiSession(
 
 		case "StatusUpdate":
 			if out := payload.Get("token_usage.output"); out.Exists() {
+				hasTotalOutputTokens = true
 				totalOutputTokens += int(out.Int())
 			}
 			if ctx := payload.Get("context_tokens"); ctx.Exists() {
+				hasPeakContextTokens = true
 				ctxTokens := int(ctx.Int())
 				if ctxTokens > peakContextTokens {
 					peakContextTokens = ctxTokens
@@ -362,17 +366,20 @@ func ParseKimiSession(
 	}
 
 	sess := &ParsedSession{
-		ID:                "kimi:" + sessionID,
-		Project:           displayProject,
-		Machine:           machine,
-		Agent:             AgentKimi,
-		FirstMessage:      firstMessage,
-		StartedAt:         startTime,
-		EndedAt:           endTime,
-		MessageCount:      len(messages),
-		UserMessageCount:  userCount,
-		TotalOutputTokens: totalOutputTokens,
-		PeakContextTokens: peakContextTokens,
+		ID:                          "kimi:" + sessionID,
+		Project:                     displayProject,
+		Machine:                     machine,
+		Agent:                       AgentKimi,
+		FirstMessage:                firstMessage,
+		StartedAt:                   startTime,
+		EndedAt:                     endTime,
+		MessageCount:                len(messages),
+		UserMessageCount:            userCount,
+		TotalOutputTokens:           totalOutputTokens,
+		PeakContextTokens:           peakContextTokens,
+		HasTotalOutputTokens:        hasTotalOutputTokens,
+		HasPeakContextTokens:        hasPeakContextTokens,
+		aggregateTokenPresenceKnown: true,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
@@ -437,5 +444,3 @@ func formatKimiToolUse(name string, input gjson.Result) string {
 		return fmt.Sprintf("[Tool: %s]", name)
 	}
 }
-
-

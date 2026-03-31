@@ -3,7 +3,7 @@
 <script lang="ts">
   import type { Message, Session } from "../../api/types.js";
   import { getMessages, getSession } from "../../api/client.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatTokenUsage } from "../../utils/format.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -21,6 +21,7 @@
   let error = $state<string | null>(null);
 
   let subagentSession = $derived(sessions.childSessions.get(sessionId) ?? null);
+  let tokenSourceSession = $derived(sessionMeta ?? subagentSession);
 
   async function toggleExpand() {
     expanded = !expanded;
@@ -58,6 +59,28 @@
       ? computeMainModel(messages)
       : "",
   );
+  let subagentHasContextTokens = $derived(
+    tokenSourceSession
+      ? (tokenSourceSession.has_peak_context_tokens ??
+        tokenSourceSession.peak_context_tokens > 0)
+      : false,
+  );
+  let subagentHasOutputTokens = $derived(
+    tokenSourceSession
+      ? (tokenSourceSession.has_total_output_tokens ??
+        tokenSourceSession.total_output_tokens > 0)
+      : false,
+  );
+  let subagentTokenSummary = $derived(
+    tokenSourceSession
+      ? formatTokenUsage(
+          tokenSourceSession.peak_context_tokens,
+          subagentHasContextTokens,
+          tokenSourceSession.total_output_tokens,
+          subagentHasOutputTokens,
+        )
+      : null,
+  );
 </script>
 
 <div class="subagent-inline">
@@ -72,11 +95,10 @@
         <span class="toggle-meta">{messageCountLabel}</span>
       {/if}
       <span class="toggle-session-id">{sessionId.slice(0, 12)}</span>
+      {#if subagentTokenSummary}
+        <span class="toggle-tokens">({subagentTokenSummary})</span>
+      {/if}
       {#if subagentSession}
-        {@const ctxTokens = subagentSession.peak_context_tokens}
-        {#if ctxTokens + subagentSession.total_output_tokens > 0}
-          <span class="toggle-tokens">({formatTokenCount(ctxTokens)} ctx / {formatTokenCount(subagentSession.total_output_tokens)} out)</span>
-        {/if}
         {#if subagentModel}
           <span class="toggle-model" title={subagentModel}>{subagentModel}</span>
         {/if}

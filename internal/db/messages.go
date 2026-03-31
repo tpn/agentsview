@@ -14,12 +14,14 @@ const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
-		model, token_usage, context_tokens, output_tokens`
+		model, token_usage, context_tokens, output_tokens,
+		has_context_tokens, has_output_tokens`
 
 	insertMessageCols = `session_id, ordinal, role, content,
 		timestamp, has_thinking, has_tool_use, content_length,
 		is_system,
-		model, token_usage, context_tokens, output_tokens`
+		model, token_usage, context_tokens, output_tokens,
+		has_context_tokens, has_output_tokens`
 
 	// DefaultMessageLimit is the default number of messages returned.
 	DefaultMessageLimit = 100
@@ -69,22 +71,53 @@ type ToolResultEvent struct {
 
 // Message represents a row in the messages table.
 type Message struct {
-	ID            int64           `json:"id"`
-	SessionID     string          `json:"session_id"`
-	Ordinal       int             `json:"ordinal"`
-	Role          string          `json:"role"`
-	Content       string          `json:"content"`
-	Timestamp     string          `json:"timestamp"`
-	HasThinking   bool            `json:"has_thinking"`
-	HasToolUse    bool            `json:"has_tool_use"`
-	ContentLength int             `json:"content_length"`
-	Model         string          `json:"model"`
-	TokenUsage    json.RawMessage `json:"token_usage,omitempty"`
-	ContextTokens int             `json:"context_tokens"`
-	OutputTokens  int             `json:"output_tokens"`
-	ToolCalls     []ToolCall      `json:"tool_calls,omitempty"`
-	ToolResults   []ToolResult    `json:"-"`         // transient, for pairing
-	IsSystem      bool            `json:"is_system"` // persisted, filters search/analytics
+	ID               int64           `json:"id"`
+	SessionID        string          `json:"session_id"`
+	Ordinal          int             `json:"ordinal"`
+	Role             string          `json:"role"`
+	Content          string          `json:"content"`
+	Timestamp        string          `json:"timestamp"`
+	HasThinking      bool            `json:"has_thinking"`
+	HasToolUse       bool            `json:"has_tool_use"`
+	ContentLength    int             `json:"content_length"`
+	Model            string          `json:"model"`
+	TokenUsage       json.RawMessage `json:"token_usage,omitempty"`
+	ContextTokens    int             `json:"context_tokens"`
+	OutputTokens     int             `json:"output_tokens"`
+	HasContextTokens bool            `json:"has_context_tokens"`
+	HasOutputTokens  bool            `json:"has_output_tokens"`
+	ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
+	ToolResults      []ToolResult    `json:"-"`         // transient, for pairing
+	IsSystem         bool            `json:"is_system"` // persisted, filters search/analytics
+}
+
+// TokenPresence reports whether context/output token fields were
+// present in stored message metadata. It preserves explicit flags,
+// falls back to non-zero numeric values for legacy rows, and inspects
+// raw token_usage payload keys to preserve zero-valued coverage.
+func (m Message) TokenPresence() (bool, bool) {
+	hasContext := m.HasContextTokens || m.ContextTokens != 0
+	hasOutput := m.HasOutputTokens || m.OutputTokens != 0
+	if len(m.TokenUsage) == 0 {
+		return hasContext, hasOutput
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(m.TokenUsage, &payload); err != nil {
+		return hasContext, hasOutput
+	}
+
+	for key := range payload {
+		switch key {
+		case "input_tokens", "cache_creation_input_tokens",
+			"cache_read_input_tokens", "input",
+			"cached", "context_tokens":
+			hasContext = true
+		case "output_tokens", "output":
+			hasOutput = true
+		}
+	}
+	return hasContext, hasOutput
 }
 
 // GetMessages returns paginated messages for a session.
@@ -161,7 +194,7 @@ func (db *DB) insertMessagesTx(
 ) ([]int64, error) {
 	stmt, err := tx.Prepare(fmt.Sprintf(`
 		INSERT INTO messages (%s)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, insertMessageCols))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, insertMessageCols))
 	if err != nil {
 		return nil, fmt.Errorf("preparing insert: %w", err)
 	}
@@ -175,6 +208,7 @@ func (db *DB) insertMessagesTx(
 			m.ContentLength, m.IsSystem,
 			m.Model, string(m.TokenUsage),
 			m.ContextTokens, m.OutputTokens,
+			m.HasContextTokens, m.HasOutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -623,6 +657,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			&m.IsSystem,
 			&m.Model, &tokenUsage,
 			&m.ContextTokens, &m.OutputTokens,
+			&m.HasContextTokens, &m.HasOutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
@@ -654,6 +689,85 @@ func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, 
 		sessionID,
 	).Scan(&sum, &max, &min)
 	return sum, max, min, err
+}
+
+// MessageTokenFingerprint returns an exact ordered fingerprint of
+// stored token metadata for a session's messages. Used by PG push
+// fast-paths to detect token metadata changes without rewriting
+// unchanged sessions.
+func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
+	rows, err := db.getReader().Query(
+		`SELECT ordinal, model, token_usage, context_tokens,
+			output_tokens, has_context_tokens, has_output_tokens
+		 FROM messages
+		 WHERE session_id = ?
+		 ORDER BY ordinal ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ordinal, contextTokens, outputTokens int
+		var model, tokenUsage string
+		var hasContextTokens, hasOutputTokens bool
+		if err := rows.Scan(
+			&ordinal, &model, &tokenUsage, &contextTokens,
+			&outputTokens, &hasContextTokens, &hasOutputTokens,
+		); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t;",
+			ordinal,
+			len(model), model,
+			len(tokenUsage), tokenUsage,
+			contextTokens, outputTokens,
+			hasContextTokens, hasOutputTokens,
+		)
+	}
+	return b.String(), rows.Err()
+}
+
+// SessionMessageTokenCoverage reports whether any stored message in the
+// session carries context/output token coverage.
+func (db *DB) SessionMessageTokenCoverage(
+	sessionID string,
+) (bool, bool, error) {
+	rows, err := db.getReader().Query(
+		`SELECT token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
+		 FROM messages
+		 WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+
+	hasContext := false
+	hasOutput := false
+	for rows.Next() {
+		var tokenUsage string
+		var msg Message
+		if err := rows.Scan(
+			&tokenUsage,
+			&msg.ContextTokens, &msg.OutputTokens,
+			&msg.HasContextTokens, &msg.HasOutputTokens,
+		); err != nil {
+			return false, false, err
+		}
+		if tokenUsage != "" {
+			msg.TokenUsage = json.RawMessage(tokenUsage)
+		}
+		msgHasContext, msgHasOutput := msg.TokenPresence()
+		hasContext = hasContext || msgHasContext
+		hasOutput = hasOutput || msgHasOutput
+	}
+	return hasContext, hasOutput, rows.Err()
 }
 
 // ToolCallCount returns the number of tool_calls rows for a session.
@@ -719,6 +833,7 @@ func (db *DB) GetMessageByOrdinal(
 		&m.IsSystem,
 		&m.Model, &tokenUsage,
 		&m.ContextTokens, &m.OutputTokens,
+		&m.HasContextTokens, &m.HasOutputTokens,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil

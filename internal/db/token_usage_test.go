@@ -17,6 +17,7 @@ func TestMigrationAddsTokenColumns(t *testing.T) {
 	for _, col := range []string{
 		"model", "token_usage",
 		"context_tokens", "output_tokens",
+		"has_context_tokens", "has_output_tokens",
 	} {
 		var count int
 		err := w.QueryRow(
@@ -32,6 +33,7 @@ func TestMigrationAddsTokenColumns(t *testing.T) {
 	// Verify session token columns exist.
 	for _, col := range []string{
 		"total_output_tokens", "peak_context_tokens",
+		"has_total_output_tokens", "has_peak_context_tokens",
 	} {
 		var count int
 		err := w.QueryRow(
@@ -67,26 +69,30 @@ func TestInsertAndGetMessagesTokenUsage(t *testing.T) {
 
 	msgs := []Message{
 		{
-			SessionID:     "s1",
-			Ordinal:       0,
-			Role:          "user",
-			Content:       "hello",
-			ContentLength: 5,
-			Model:         "claude-sonnet-4-20250514",
-			TokenUsage:    json.RawMessage(`{"input":100,"output":0}`),
-			ContextTokens: 500,
-			OutputTokens:  0,
+			SessionID:        "s1",
+			Ordinal:          0,
+			Role:             "user",
+			Content:          "hello",
+			ContentLength:    5,
+			Model:            "claude-sonnet-4-20250514",
+			TokenUsage:       json.RawMessage(`{"input":100,"output":0}`),
+			ContextTokens:    500,
+			OutputTokens:     0,
+			HasContextTokens: true,
+			HasOutputTokens:  true,
 		},
 		{
-			SessionID:     "s1",
-			Ordinal:       1,
-			Role:          "assistant",
-			Content:       "world",
-			ContentLength: 5,
-			Model:         "claude-sonnet-4-20250514",
-			TokenUsage:    json.RawMessage(`{"input":0,"output":200}`),
-			ContextTokens: 600,
-			OutputTokens:  200,
+			SessionID:        "s1",
+			Ordinal:          1,
+			Role:             "assistant",
+			Content:          "world",
+			ContentLength:    5,
+			Model:            "claude-sonnet-4-20250514",
+			TokenUsage:       json.RawMessage(`{"input":0,"output":200}`),
+			ContextTokens:    600,
+			OutputTokens:     200,
+			HasContextTokens: true,
+			HasOutputTokens:  true,
 		},
 	}
 	insertMessages(t, d, msgs...)
@@ -111,6 +117,12 @@ func TestInsertAndGetMessagesTokenUsage(t *testing.T) {
 		t.Errorf("msg[0].ContextTokens = %d, want 500",
 			got[0].ContextTokens)
 	}
+	if !got[0].HasContextTokens {
+		t.Error("msg[0].HasContextTokens = false, want true")
+	}
+	if !got[0].HasOutputTokens {
+		t.Error("msg[0].HasOutputTokens = false, want true")
+	}
 
 	// Verify second message fields.
 	if got[1].OutputTokens != 200 {
@@ -120,6 +132,12 @@ func TestInsertAndGetMessagesTokenUsage(t *testing.T) {
 	if got[1].ContextTokens != 600 {
 		t.Errorf("msg[1].ContextTokens = %d, want 600",
 			got[1].ContextTokens)
+	}
+	if !got[1].HasContextTokens {
+		t.Error("msg[1].HasContextTokens = false, want true")
+	}
+	if !got[1].HasOutputTokens {
+		t.Error("msg[1].HasOutputTokens = false, want true")
 	}
 }
 
@@ -200,13 +218,15 @@ func TestUpsertSessionTokenUsage(t *testing.T) {
 	ctx := context.Background()
 
 	s := Session{
-		ID:                "s1",
-		Project:           "proj",
-		Machine:           defaultMachine,
-		Agent:             defaultAgent,
-		MessageCount:      5,
-		TotalOutputTokens: 2000,
-		PeakContextTokens: 8000,
+		ID:                   "s1",
+		Project:              "proj",
+		Machine:              defaultMachine,
+		Agent:                defaultAgent,
+		MessageCount:         5,
+		TotalOutputTokens:    2000,
+		PeakContextTokens:    8000,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
 	}
 	requireNoError(t, d.UpsertSession(s), "upsert")
 
@@ -223,6 +243,12 @@ func TestUpsertSessionTokenUsage(t *testing.T) {
 		t.Errorf("PeakContextTokens = %d, want 8000",
 			got.PeakContextTokens)
 	}
+	if !got.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = false, want true")
+	}
+	if !got.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = false, want true")
+	}
 
 	// Update with new token values.
 	s.TotalOutputTokens = 2500
@@ -238,6 +264,12 @@ func TestUpsertSessionTokenUsage(t *testing.T) {
 	if got.PeakContextTokens != 9000 {
 		t.Errorf("PeakContextTokens after update = %d, want 9000",
 			got.PeakContextTokens)
+	}
+	if !got.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens after update = false, want true")
+	}
+	if !got.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens after update = false, want true")
 	}
 }
 
@@ -260,6 +292,12 @@ func TestSessionTokenUsageDefaultsToZero(t *testing.T) {
 	if got.PeakContextTokens != 0 {
 		t.Errorf("PeakContextTokens = %d, want 0",
 			got.PeakContextTokens)
+	}
+	if got.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = true, want false")
+	}
+	if got.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = true, want false")
 	}
 }
 
@@ -290,6 +328,12 @@ func TestMessageTokenUsageDefaultsToZero(t *testing.T) {
 	if got[0].OutputTokens != 0 {
 		t.Errorf("OutputTokens = %d, want 0",
 			got[0].OutputTokens)
+	}
+	if got[0].HasContextTokens {
+		t.Error("HasContextTokens = true, want false")
+	}
+	if got[0].HasOutputTokens {
+		t.Error("HasOutputTokens = true, want false")
 	}
 }
 
@@ -339,15 +383,17 @@ func TestReplaceSessionMessagesTokenUsage(t *testing.T) {
 
 	// Replace with new messages that have different token values.
 	newMsgs := []Message{{
-		SessionID:     "s1",
-		Ordinal:       0,
-		Role:          "user",
-		Content:       "new",
-		ContentLength: 3,
-		Model:         "claude-sonnet-4-20250514",
-		TokenUsage:    json.RawMessage(`{"input":999,"output":888}`),
-		ContextTokens: 700,
-		OutputTokens:  888,
+		SessionID:        "s1",
+		Ordinal:          0,
+		Role:             "user",
+		Content:          "new",
+		ContentLength:    3,
+		Model:            "claude-sonnet-4-20250514",
+		TokenUsage:       json.RawMessage(`{"input":999,"output":888}`),
+		ContextTokens:    700,
+		OutputTokens:     888,
+		HasContextTokens: true,
+		HasOutputTokens:  true,
 	}}
 	requireNoError(t,
 		d.ReplaceSessionMessages("s1", newMsgs),
@@ -375,6 +421,12 @@ func TestReplaceSessionMessagesTokenUsage(t *testing.T) {
 		t.Errorf("OutputTokens = %d, want 888",
 			got[0].OutputTokens)
 	}
+	if !got[0].HasContextTokens {
+		t.Error("HasContextTokens = false, want true")
+	}
+	if !got[0].HasOutputTokens {
+		t.Error("HasOutputTokens = false, want true")
+	}
 }
 
 func TestListSessionsTokenUsage(t *testing.T) {
@@ -382,13 +434,15 @@ func TestListSessionsTokenUsage(t *testing.T) {
 	ctx := context.Background()
 
 	s := Session{
-		ID:                "s1",
-		Project:           "proj",
-		Machine:           defaultMachine,
-		Agent:             defaultAgent,
-		MessageCount:      2,
-		TotalOutputTokens: 222,
-		PeakContextTokens: 5000,
+		ID:                   "s1",
+		Project:              "proj",
+		Machine:              defaultMachine,
+		Agent:                defaultAgent,
+		MessageCount:         2,
+		TotalOutputTokens:    222,
+		PeakContextTokens:    5000,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
 	}
 	requireNoError(t, d.UpsertSession(s), "upsert")
 
@@ -407,6 +461,12 @@ func TestListSessionsTokenUsage(t *testing.T) {
 		t.Errorf("PeakContextTokens = %d, want 5000",
 			got.PeakContextTokens)
 	}
+	if !got.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = false, want true")
+	}
+	if !got.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = false, want true")
+	}
 }
 
 func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
@@ -414,17 +474,19 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 	ctx := context.Background()
 
 	s := Session{
-		ID:                "inc-tokens",
-		Project:           "proj",
-		Machine:           "test",
-		Agent:             "claude",
-		MessageCount:      5,
-		UserMessageCount:  2,
-		TotalOutputTokens: 1000,
-		PeakContextTokens: 8000,
-		FilePath:          Ptr("/tmp/s.jsonl"),
-		FileSize:          Ptr(int64(2048)),
-		FileMtime:         Ptr(int64(100)),
+		ID:                   "inc-tokens",
+		Project:              "proj",
+		Machine:              "test",
+		Agent:                "claude",
+		MessageCount:         5,
+		UserMessageCount:     2,
+		TotalOutputTokens:    1000,
+		PeakContextTokens:    8000,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
+		FilePath:             Ptr("/tmp/s.jsonl"),
+		FileSize:             Ptr(int64(2048)),
+		FileMtime:            Ptr(int64(100)),
 	}
 	requireNoError(t, d.UpsertSession(s), "upsert")
 
@@ -435,7 +497,7 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 		ended := "2024-01-15T10:30:00Z"
 		err := d.UpdateSessionIncremental(
 			"inc-tokens", &ended, 5, 2, 4096, 200,
-			1000, 8000,
+			1000, 8000, true, true,
 		)
 		requireNoError(t, err, "incremental update")
 
@@ -453,13 +515,19 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 				got.PeakContextTokens,
 			)
 		}
+		if !got.HasTotalOutputTokens {
+			t.Error("HasTotalOutputTokens = false, want true")
+		}
+		if !got.HasPeakContextTokens {
+			t.Error("HasPeakContextTokens = false, want true")
+		}
 	})
 
 	t.Run("update with new messages advances tokens", func(t *testing.T) {
 		ended := "2024-01-15T11:00:00Z"
 		err := d.UpdateSessionIncremental(
 			"inc-tokens", &ended, 8, 3, 8192, 300,
-			1500, 9000,
+			1500, 9000, true, true,
 		)
 		requireNoError(t, err, "incremental update")
 
@@ -477,6 +545,12 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 				got.PeakContextTokens,
 			)
 		}
+		if !got.HasTotalOutputTokens {
+			t.Error("HasTotalOutputTokens = false, want true")
+		}
+		if !got.HasPeakContextTokens {
+			t.Error("HasPeakContextTokens = false, want true")
+		}
 	})
 
 	t.Run("idempotent retry does not inflate tokens", func(t *testing.T) {
@@ -485,7 +559,7 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 		ended := "2024-01-15T11:00:00Z"
 		err := d.UpdateSessionIncremental(
 			"inc-tokens", &ended, 8, 3, 8192, 300,
-			1500, 9000,
+			1500, 9000, true, true,
 		)
 		requireNoError(t, err, "retry update")
 
@@ -497,6 +571,12 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 					" (retry inflated)",
 				got.TotalOutputTokens,
 			)
+		}
+		if !got.HasTotalOutputTokens {
+			t.Error("HasTotalOutputTokens = false, want true")
+		}
+		if !got.HasPeakContextTokens {
+			t.Error("HasPeakContextTokens = false, want true")
 		}
 	})
 }

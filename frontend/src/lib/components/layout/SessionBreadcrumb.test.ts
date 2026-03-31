@@ -25,7 +25,15 @@ vi.mock("../../utils/clipboard.js", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
 
-function makeSession(agent: string): Session {
+type SessionWithTokenFlags = Session & {
+  has_peak_context_tokens?: boolean;
+  has_total_output_tokens?: boolean;
+};
+
+function makeSession(
+  agent: string,
+  overrides: Partial<SessionWithTokenFlags> = {},
+): SessionWithTokenFlags {
   return {
     id: "run:123456789abcdef",
     project: "proj-a",
@@ -39,8 +47,13 @@ function makeSession(agent: string): Session {
     total_output_tokens: 0,
     peak_context_tokens: 0,
     created_at: "2026-02-20T12:30:00Z",
+    ...overrides,
   };
 }
+
+afterEach(() => {
+  document.body.innerHTML = "";
+});
 
 describe("SessionBreadcrumb", () => {
   it("renders gemini with rose badge color", async () => {
@@ -139,5 +152,77 @@ describe("SessionBreadcrumb", () => {
 
       unmount(component);
     });
+  });
+
+  it("renders compact token totals when both token metrics are reported", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          peak_context_tokens: 2400,
+          total_output_tokens: 180,
+          has_peak_context_tokens: true,
+          has_total_output_tokens: true,
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    const tokenBadge = document.querySelector(".token-badge");
+    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "2.4k ctx / 180 out",
+    );
+
+    unmount(component);
+  });
+
+  it("renders an explicit missing token placeholder when context tokens are absent", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          peak_context_tokens: 0,
+          total_output_tokens: 180,
+          has_peak_context_tokens: false,
+          has_total_output_tokens: true,
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    const tokenBadge = document.querySelector(".token-badge");
+    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "— ctx / 180 out",
+    );
+
+    unmount(component);
+  });
+
+  it("renders a dedicated mobile token badge", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          peak_context_tokens: 2400,
+          total_output_tokens: 180,
+          has_peak_context_tokens: true,
+          has_total_output_tokens: true,
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+
+    const mobileTokenBadge = document.querySelector(
+      ".token-badge--mobile",
+    );
+    expect(
+      mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("2.4k ctx / 180 out");
+
+    unmount(component);
   });
 });

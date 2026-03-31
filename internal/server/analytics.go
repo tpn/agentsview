@@ -196,11 +196,11 @@ func (s *Server) handleAnalyticsHeatmap(
 		metric = "messages"
 	}
 	switch metric {
-	case "messages", "sessions":
+	case "messages", "sessions", "output_tokens":
 		// valid
 	default:
 		writeError(w, http.StatusBadRequest,
-			"invalid metric: must be messages or sessions")
+			"invalid metric: must be messages, sessions, or output_tokens")
 		return
 	}
 
@@ -349,11 +349,11 @@ func (s *Server) handleAnalyticsTopSessions(
 		metric = "messages"
 	}
 	switch metric {
-	case "messages", "duration":
+	case "messages", "duration", "output_tokens":
 		// valid
 	default:
 		writeError(w, http.StatusBadRequest,
-			"invalid metric: must be messages or duration")
+			"invalid metric: must be messages, duration, or output_tokens")
 		return
 	}
 

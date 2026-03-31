@@ -522,6 +522,10 @@ func sessionPushFingerprint(sess db.Session) string {
 		stringValue(sess.DeletedAt),
 		fmt.Sprintf("%d", sess.MessageCount),
 		fmt.Sprintf("%d", sess.UserMessageCount),
+		fmt.Sprintf("%d", sess.TotalOutputTokens),
+		fmt.Sprintf("%d", sess.PeakContextTokens),
+		fmt.Sprintf("%t", sess.HasTotalOutputTokens),
+		fmt.Sprintf("%t", sess.HasPeakContextTokens),
 		stringValue(sess.ParentSessionID),
 		sess.RelationshipType,
 		stringValue(sess.FileHash),
@@ -592,12 +596,15 @@ func (s *Sync) pushSession(
 			first_message, display_name,
 			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
+			total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens,
 			parent_session_id, relationship_type,
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10,
-			$11, $12, $13, $14, NOW()
+			$11, $12, $13, $14,
+			$15, $16, $17, $18, NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			machine = EXCLUDED.machine,
@@ -611,6 +618,10 @@ func (s *Sync) pushSession(
 			deleted_at = EXCLUDED.deleted_at,
 			message_count = EXCLUDED.message_count,
 			user_message_count = EXCLUDED.user_message_count,
+			total_output_tokens = EXCLUDED.total_output_tokens,
+			peak_context_tokens = EXCLUDED.peak_context_tokens,
+			has_total_output_tokens = EXCLUDED.has_total_output_tokens,
+			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens,
 			parent_session_id = EXCLUDED.parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
 			updated_at = NOW()
@@ -625,6 +636,10 @@ func (s *Sync) pushSession(
 			OR sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
 			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
+			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens
+			OR sessions.peak_context_tokens IS DISTINCT FROM EXCLUDED.peak_context_tokens
+			OR sessions.has_total_output_tokens IS DISTINCT FROM EXCLUDED.has_total_output_tokens
+			OR sessions.has_peak_context_tokens IS DISTINCT FROM EXCLUDED.has_peak_context_tokens
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type`,
 		sess.ID, s.machine,
@@ -637,6 +652,8 @@ func (s *Sync) pushSession(
 		nilStrTS(sess.EndedAt),
 		nilStrTS(sess.DeletedAt),
 		sess.MessageCount, sess.UserMessageCount,
+		sess.TotalOutputTokens, sess.PeakContextTokens,
+		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,
 		nilStr(sess.ParentSessionID),
 		sess.RelationshipType,
 	)
@@ -753,12 +770,25 @@ func (s *Sync) pushMessages(
 					"fingerprint: %w", err,
 			)
 		}
+		localTokenFP, err := s.local.MessageTokenFingerprint(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing local token fingerprint: %w", err,
+			)
+		}
+		pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing pg token fingerprint: %w", err,
+			)
+		}
 		if localSum == pgContentSum &&
 			localMax == pgContentMax &&
 			localMin == pgContentMin &&
 			localSysFP == pgSystemFP.String &&
 			localTCCount == pgToolCallCount &&
-			localTCSum == pgTCContentSum {
+			localTCSum == pgTCContentSum &&
+			localTokenFP == pgTokenFP {
 			return 0, nil
 		}
 	}
@@ -836,6 +866,44 @@ func (s *Sync) pushMessages(
 	return count, nil
 }
 
+func pgMessageTokenFingerprint(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT ordinal, model, token_usage, context_tokens,
+			output_tokens, has_context_tokens, has_output_tokens
+		 FROM messages
+		 WHERE session_id = $1
+		 ORDER BY ordinal ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ordinal, contextTokens, outputTokens int
+		var model, tokenUsage string
+		var hasContextTokens, hasOutputTokens bool
+		if err := rows.Scan(
+			&ordinal, &model, &tokenUsage, &contextTokens,
+			&outputTokens, &hasContextTokens, &hasOutputTokens,
+		); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s|%d|%d|%t|%t;",
+			ordinal,
+			len(model), model,
+			len(tokenUsage), tokenUsage,
+			contextTokens, outputTokens,
+			hasContextTokens, hasOutputTokens,
+		)
+	}
+	return b.String(), rows.Err()
+}
+
 const msgInsertBatch = 100
 
 // bulkInsertMessages inserts messages using multi-row VALUES.
@@ -851,17 +919,20 @@ func bulkInsertMessages(
 		b.WriteString(`INSERT INTO messages (
 			session_id, ordinal, role, content,
 			timestamp, has_thinking, has_tool_use,
-			content_length, is_system) VALUES `)
-		args := make([]any, 0, len(batch)*9)
+			content_length, is_system, model, token_usage,
+			context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens) VALUES `)
+		args := make([]any, 0, len(batch)*15)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*9 + 1
+			p := j*15 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3,
 				p+4, p+5, p+6, p+7, p+8,
+				p+9, p+10, p+11, p+12, p+13, p+14,
 			)
 			var ts any
 			if m.Timestamp != "" {
@@ -876,6 +947,9 @@ func bulkInsertMessages(
 				sanitizePG(m.Content), ts,
 				m.HasThinking,
 				m.HasToolUse, m.ContentLength, m.IsSystem,
+				m.Model, string(m.TokenUsage),
+				m.ContextTokens, m.OutputTokens,
+				m.HasContextTokens, m.HasOutputTokens,
 			)
 		}
 		if _, err := tx.ExecContext(

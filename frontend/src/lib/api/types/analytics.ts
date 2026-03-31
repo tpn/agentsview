@@ -1,8 +1,14 @@
 /** Analytics types — match Go structs in internal/db/analytics.go */
 
 export type Granularity = "day" | "week" | "month";
-export type HeatmapMetric = "messages" | "sessions";
-export type TopSessionsMetric = "messages" | "duration";
+export type HeatmapMetric =
+  | "messages"
+  | "sessions"
+  | "output_tokens";
+export type TopSessionsMetric =
+  | "messages"
+  | "duration"
+  | "output_tokens";
 
 export interface AgentSummary {
   sessions: number;
@@ -12,6 +18,8 @@ export interface AgentSummary {
 export interface AnalyticsSummary {
   total_sessions: number;
   total_messages: number;
+  total_output_tokens?: number;
+  token_reporting_sessions?: number;
   active_projects: number;
   active_days: number;
   avg_messages: number;
@@ -52,7 +60,7 @@ export interface HeatmapLevels {
 }
 
 export interface HeatmapResponse {
-  metric: string;
+  metric: HeatmapMetric;
   entries: HeatmapEntry[];
   levels: HeatmapLevels;
   entries_from: string;
@@ -126,11 +134,12 @@ export interface TopSession {
   project: string;
   first_message: string | null;
   message_count: number;
+  output_tokens: number;
   duration_min: number;
 }
 
 export interface TopSessionsResponse {
-  metric: string;
+  metric: TopSessionsMetric;
   sessions: TopSession[];
 }
 

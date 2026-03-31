@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sanitizeSnippet, _resetNonceCounter, formatTokenCount } from "./format.js";
+import {
+  sanitizeSnippet,
+  _resetNonceCounter,
+  formatTokenCount,
+  formatTokenUsage,
+} from "./format.js";
 
 describe("sanitizeSnippet", () => {
   beforeEach(() => {
@@ -119,5 +124,26 @@ describe("formatTokenCount", () => {
     expect(formatTokenCount(2000)).toBe("2k");
     expect(formatTokenCount(10000)).toBe("10k");
     expect(formatTokenCount(3000000)).toBe("3M");
+  });
+});
+
+describe("formatTokenUsage", () => {
+  it("returns null when no token metrics are reported", () => {
+    expect(formatTokenUsage(0, false, 0, false)).toBeNull();
+  });
+
+  it("formats both reported token metrics", () => {
+    expect(formatTokenUsage(2400, true, 180, true)).toBe(
+      "2.4k ctx / 180 out",
+    );
+  });
+
+  it("renders an explicit placeholder for missing token metrics", () => {
+    expect(formatTokenUsage(0, false, 180, true)).toBe(
+      "— ctx / 180 out",
+    );
+    expect(formatTokenUsage(2400, true, 0, false)).toBe(
+      "2.4k ctx / — out",
+    );
   });
 });

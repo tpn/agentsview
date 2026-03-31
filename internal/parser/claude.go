@@ -353,15 +353,16 @@ func extractMessagesFrom(
 		}
 
 		msg := ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleType(e.entryType),
-			Content:       text,
-			Timestamp:     e.timestamp,
-			HasThinking:   hasThinking,
-			HasToolUse:    hasToolUse,
-			ContentLength: len(text),
-			ToolCalls:     tcs,
-			ToolResults:   trs,
+			Ordinal:            ordinal,
+			Role:               RoleType(e.entryType),
+			Content:            text,
+			Timestamp:          e.timestamp,
+			HasThinking:        hasThinking,
+			HasToolUse:         hasToolUse,
+			ContentLength:      len(text),
+			ToolCalls:          tcs,
+			ToolResults:        trs,
+			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
 		if e.entryType == "assistant" {
@@ -414,7 +415,7 @@ func parseLinear(
 		UserMessageCount: userCount,
 		File:             fileInfo,
 	}
-	sumTokenUsage(&sess, messages)
+	accumulateMessageTokenUsage(&sess, messages)
 
 	return []ParseResult{{Session: sess, Messages: messages}}, nil
 }
@@ -590,7 +591,7 @@ func parseDAG(
 			UserMessageCount: userCount,
 			File:             fileInfo,
 		}
-		sumTokenUsage(&sess, messages)
+		accumulateMessageTokenUsage(&sess, messages)
 
 		results = append(results, ParseResult{
 			Session:  sess,
@@ -679,15 +680,16 @@ func extractMessages(entries []dagEntry) (
 		}
 
 		msg := ParsedMessage{
-			Ordinal:       ordinal,
-			Role:          RoleType(e.entryType),
-			Content:       text,
-			Timestamp:     e.timestamp,
-			HasThinking:   hasThinking,
-			HasToolUse:    hasToolUse,
-			ContentLength: len(text),
-			ToolCalls:     tcs,
-			ToolResults:   trs,
+			Ordinal:            ordinal,
+			Role:               RoleType(e.entryType),
+			Content:            text,
+			Timestamp:          e.timestamp,
+			HasThinking:        hasThinking,
+			HasToolUse:         hasToolUse,
+			ContentLength:      len(text),
+			ToolCalls:          tcs,
+			ToolResults:        trs,
+			tokenPresenceKnown: e.entryType == "assistant",
 		}
 
 		if e.entryType == "assistant" {
@@ -711,6 +713,10 @@ func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 	usageResult := gjson.Get(line, "message.usage")
 	if usageResult.Exists() {
 		msg.TokenUsage = json.RawMessage(usageResult.Raw)
+		msg.HasOutputTokens = usageResult.Get("output_tokens").Exists()
+		msg.HasContextTokens = usageResult.Get("input_tokens").Exists() ||
+			usageResult.Get("cache_creation_input_tokens").Exists() ||
+			usageResult.Get("cache_read_input_tokens").Exists()
 
 		input := int(usageResult.Get("input_tokens").Int())
 		cacheCreation := int(usageResult.Get(
@@ -723,17 +729,6 @@ func extractClaudeTokenFields(msg *ParsedMessage, line string) {
 			"output_tokens",
 		).Int())
 		msg.ContextTokens = input + cacheCreation + cacheRead
-	}
-}
-
-// sumTokenUsage accumulates per-message token counts into session
-// totals on the given ParsedSession.
-func sumTokenUsage(sess *ParsedSession, messages []ParsedMessage) {
-	for _, m := range messages {
-		sess.TotalOutputTokens += m.OutputTokens
-		if m.ContextTokens > sess.PeakContextTokens {
-			sess.PeakContextTokens = m.ContextTokens
-		}
 	}
 }
 

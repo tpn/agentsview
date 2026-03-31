@@ -1103,6 +1103,49 @@ func TestListSessionsProjectFilter(t *testing.T) {
 	}), 2)
 }
 
+func TestListSessionsMachineMultiSelect(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "s-local", "proj", func(s *Session) {
+		s.Machine = "local"
+		s.EndedAt = Ptr("2024-01-01T00:00:00Z")
+	})
+	insertSession(t, d, "s-remote", "proj", func(s *Session) {
+		s.Machine = "remote"
+		s.EndedAt = Ptr("2024-01-01T00:00:01Z")
+	})
+	insertSession(t, d, "s-other", "proj", func(s *Session) {
+		s.Machine = "other"
+		s.EndedAt = Ptr("2024-01-01T00:00:02Z")
+	})
+
+	page, err := d.ListSessions(
+		context.Background(),
+		SessionFilter{
+			Machine: "local,other",
+			Limit:   10,
+		},
+	)
+	requireNoError(t, err, "ListSessions")
+	if page.Total != 2 {
+		t.Fatalf("total = %d, want 2", page.Total)
+	}
+
+	got := map[string]bool{}
+	for _, session := range page.Sessions {
+		got[session.Machine] = true
+	}
+	if !got["local"] {
+		t.Fatalf("machines = %v, want local included", got)
+	}
+	if !got["other"] {
+		t.Fatalf("machines = %v, want other included", got)
+	}
+	if got["remote"] {
+		t.Fatalf("machines = %v, want remote excluded", got)
+	}
+}
+
 func TestMessageCRUD(t *testing.T) {
 	d := testDB(t)
 
@@ -4525,22 +4568,358 @@ CREATE TABLE IF NOT EXISTS insights (
 	requireNoError(t, err, "writing deleted_at")
 }
 
+func TestOpenBackfillsLegacyTokenCoverageFlags(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy-token-flags.db")
+
+	conn, err := sql.Open("sqlite3", makeDSN(path, false))
+	requireNoError(t, err, "opening legacy db")
+	conn.SetMaxOpenConns(1)
+
+	legacySchema := `
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    project     TEXT NOT NULL,
+    machine     TEXT NOT NULL DEFAULT 'local',
+    agent       TEXT NOT NULL DEFAULT 'claude',
+    first_message TEXT,
+    display_name TEXT,
+    started_at  TEXT,
+    ended_at    TEXT,
+    message_count INTEGER NOT NULL DEFAULT 0,
+    user_message_count INTEGER NOT NULL DEFAULT 0,
+    file_path   TEXT,
+    file_size   INTEGER,
+    file_mtime  INTEGER,
+    file_hash   TEXT,
+    local_modified_at TEXT,
+    parent_session_id TEXT,
+    relationship_type TEXT NOT NULL DEFAULT '',
+    total_output_tokens INTEGER NOT NULL DEFAULT 0,
+    peak_context_tokens INTEGER NOT NULL DEFAULT 0,
+    deleted_at  TEXT,
+    created_at  TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS messages (
+    id             INTEGER PRIMARY KEY,
+    session_id     TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    ordinal        INTEGER NOT NULL,
+    role           TEXT NOT NULL,
+    content        TEXT NOT NULL,
+    timestamp      TEXT,
+    has_thinking   INTEGER NOT NULL DEFAULT 0,
+    has_tool_use   INTEGER NOT NULL DEFAULT 0,
+    content_length INTEGER NOT NULL DEFAULT 0,
+    is_system      INTEGER NOT NULL DEFAULT 0,
+    model          TEXT NOT NULL DEFAULT '',
+    token_usage    TEXT NOT NULL DEFAULT '',
+    context_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(session_id, ordinal)
+);
+CREATE TABLE IF NOT EXISTS insights (
+    id          INTEGER PRIMARY KEY,
+    type        TEXT NOT NULL DEFAULT '',
+    date_from   TEXT NOT NULL,
+    date_to     TEXT NOT NULL DEFAULT '',
+    project     TEXT,
+    agent       TEXT NOT NULL DEFAULT '',
+    model       TEXT,
+    prompt      TEXT,
+    content     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id                  INTEGER PRIMARY KEY,
+    message_id          INTEGER NOT NULL,
+    session_id          TEXT NOT NULL,
+    tool_name           TEXT NOT NULL DEFAULT '',
+    category            TEXT NOT NULL DEFAULT '',
+    tool_use_id         TEXT,
+    input_json          TEXT,
+    skill_name          TEXT,
+    result_content_length INTEGER,
+    result_content      TEXT,
+    subagent_session_id TEXT
+);`
+
+	_, err = conn.Exec(legacySchema)
+	requireNoError(t, err, "creating legacy schema")
+	_, err = conn.Exec(
+		fmt.Sprintf("PRAGMA user_version = %d", dataVersion),
+	)
+	requireNoError(t, err, "setting user_version")
+
+	_, err = conn.Exec(
+		`INSERT INTO sessions (
+			id, project, machine, agent, message_count,
+			total_output_tokens, peak_context_tokens
+		) VALUES
+			('legacy-nonzero', 'proj', 'local', 'claude', 0, 200, 600),
+			('legacy-zero', 'proj', 'local', 'claude', 1, 0, 0)`,
+	)
+	requireNoError(t, err, "inserting legacy sessions")
+	_, err = conn.Exec(
+		`INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage,
+			context_tokens, output_tokens
+		) VALUES
+			('legacy-zero', 0, 'assistant', 'hi',
+			 '2024-01-01T00:00:00Z', 2,
+			 'claude-sonnet-4-20250514',
+			 '{"input_tokens":0,"output_tokens":0}', 0, 0)`,
+	)
+	requireNoError(t, err, "inserting legacy message")
+	requireNoError(t, conn.Close(), "closing legacy db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "Open with legacy token schema")
+	defer d.Close()
+
+	ctx := context.Background()
+	nonzero, err := d.GetSession(ctx, "legacy-nonzero")
+	requireNoError(t, err, "GetSession legacy-nonzero")
+	if nonzero == nil {
+		t.Fatal("legacy-nonzero missing")
+	}
+	if !nonzero.HasTotalOutputTokens {
+		t.Error("legacy-nonzero HasTotalOutputTokens = false, want true")
+	}
+	if !nonzero.HasPeakContextTokens {
+		t.Error("legacy-nonzero HasPeakContextTokens = false, want true")
+	}
+
+	zero, err := d.GetSession(ctx, "legacy-zero")
+	requireNoError(t, err, "GetSession legacy-zero")
+	if zero == nil {
+		t.Fatal("legacy-zero missing")
+	}
+	if !zero.HasTotalOutputTokens {
+		t.Error("legacy-zero HasTotalOutputTokens = false, want true")
+	}
+	if !zero.HasPeakContextTokens {
+		t.Error("legacy-zero HasPeakContextTokens = false, want true")
+	}
+
+	msgs, err := d.GetMessages(ctx, "legacy-zero", 0, 10, true)
+	requireNoError(t, err, "GetMessages legacy-zero")
+	if len(msgs) != 1 {
+		t.Fatalf("legacy-zero messages = %d, want 1", len(msgs))
+	}
+	if !msgs[0].HasContextTokens {
+		t.Error("legacy-zero message HasContextTokens = false, want true")
+	}
+	if !msgs[0].HasOutputTokens {
+		t.Error("legacy-zero message HasOutputTokens = false, want true")
+	}
+}
+
+func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "current-token-flags.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "Open initial")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO sessions (
+			id, project, machine, agent, message_count,
+			total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"current", "proj", "local", "claude", 1,
+		0, 0, false, false,
+	)
+	requireNoError(t, err, "insert session")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"current", 0, "assistant", "hello",
+		tsZero, `{"input_tokens":0,"output_tokens":0}`, 0, 0,
+		false, false,
+	)
+	requireNoError(t, err, "insert message")
+	_, err = d.getWriter().Exec(
+		`DELETE FROM stats WHERE key = ?`,
+		tokenCoverageRepairStatsKey,
+	)
+	requireNoError(t, err, "clear token coverage repair marker")
+	requireNoError(t, d.Close(), "Close initial")
+
+	d, err = Open(path)
+	requireNoError(
+		t, err,
+		"Open should repair legacy current-schema token coverage once",
+	)
+
+	ctx := context.Background()
+	sess, err := d.GetSession(ctx, "current")
+	requireNoError(t, err, "GetSession current")
+	if sess == nil {
+		t.Fatal("current session missing")
+	}
+	if !sess.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = false, want true")
+	}
+	if !sess.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = false, want true")
+	}
+
+	msgs, err := d.GetMessages(ctx, "current", 0, 10, true)
+	requireNoError(t, err, "GetMessages current")
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	if !msgs[0].HasContextTokens {
+		t.Error("HasContextTokens = false, want true")
+	}
+	if !msgs[0].HasOutputTokens {
+		t.Error("HasOutputTokens = false, want true")
+	}
+	_, err = d.getWriter().Exec(
+		`UPDATE sessions
+		 SET has_total_output_tokens = 0,
+		     has_peak_context_tokens = 0
+		 WHERE id = ?`,
+		"current",
+	)
+	requireNoError(t, err, "reset session flags")
+	_, err = d.getWriter().Exec(
+		`UPDATE messages
+		 SET has_context_tokens = 0,
+		     has_output_tokens = 0
+		 WHERE session_id = ?`,
+		"current",
+	)
+	requireNoError(t, err, "reset message flags")
+	requireNoError(t, d.Close(), "Close repaired db")
+
+	d, err = Open(path)
+	requireNoError(
+		t, err,
+		"Open should skip token coverage repair after marker is stored",
+	)
+	defer d.Close()
+
+	sess, err = d.GetSession(ctx, "current")
+	requireNoError(t, err, "GetSession current after marker")
+	if sess == nil {
+		t.Fatal("current session missing after marker")
+	}
+	if sess.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = true after marker, want false")
+	}
+	if sess.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = true after marker, want false")
+	}
+
+	msgs, err = d.GetMessages(ctx, "current", 0, 10, true)
+	requireNoError(t, err, "GetMessages current after marker")
+	if len(msgs) != 1 {
+		t.Fatalf("messages len after marker = %d, want 1", len(msgs))
+	}
+	if msgs[0].HasContextTokens {
+		t.Error("HasContextTokens = true after marker, want false")
+	}
+	if msgs[0].HasOutputTokens {
+		t.Error("HasOutputTokens = true after marker, want false")
+	}
+}
+
+func TestBackfillMessageTokenCoverageSkipsRowsWithoutTokenSignals(
+	t *testing.T,
+) {
+	d := testDB(t)
+
+	_, err := d.getWriter().Exec(
+		`INSERT INTO sessions (
+			id, project, machine, agent, message_count
+		) VALUES (?, ?, ?, ?, ?)`,
+		"no-signal", "proj", "local", "claude", 1,
+	)
+	requireNoError(t, err, "insert session")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"no-signal", 0, "assistant", "hello", tsZero, "", 0, 0,
+		false, false,
+	)
+	requireNoError(t, err, "insert message")
+
+	candidates, err := d.messageTokenCoverageBackfillCandidatesLocked(
+		d.getWriter(),
+	)
+	requireNoError(t, err, "messageTokenCoverageBackfillCandidatesLocked")
+	if len(candidates) != 0 {
+		t.Fatalf("candidate count = %d, want 0", len(candidates))
+	}
+}
+
+func TestOpenBackfillSessionTokenCoverageSkipsMessageScanWithoutCandidates(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "no-session-backfill-candidates.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "Open")
+	defer d.Close()
+
+	_, err = d.getWriter().Exec(
+		`INSERT INTO sessions (
+			id, project, machine, agent, message_count,
+			has_total_output_tokens, has_peak_context_tokens
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"done", "proj", "local", "claude", 1, 1, 1,
+	)
+	requireNoError(t, err, "insert session")
+
+	_, err = d.getWriter().Exec(
+		`INSERT INTO messages (
+			session_id, ordinal, role, content,
+			has_context_tokens, has_output_tokens
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		"done", 0, "assistant", "hello", "not-a-bool", "not-a-bool",
+	)
+	requireNoError(t, err, "insert message")
+
+	updates, err := d.backfillSessionTokenCoverageLocked(
+		d.getWriter(),
+	)
+	requireNoError(t, err, "backfillSessionTokenCoverageLocked")
+	if updates != 0 {
+		t.Fatalf("updates = %d, want 0", updates)
+	}
+}
+
 func TestGetSessionForIncremental(t *testing.T) {
 	d := testDB(t)
 
 	s := Session{
-		ID:               "codex:inc-test",
-		Project:          "my-project",
-		Machine:          "test",
-		Agent:            "codex",
-		FirstMessage:     Ptr("hello world"),
-		StartedAt:        Ptr("2024-01-15T10:00:00Z"),
-		EndedAt:          Ptr("2024-01-15T10:30:00Z"),
-		MessageCount:     5,
-		UserMessageCount: 2,
-		FilePath:         Ptr("/tmp/sessions/test.jsonl"),
-		FileSize:         Ptr(int64(4096)),
-		FileMtime:        Ptr(int64(999)),
+		ID:                   "codex:inc-test",
+		Project:              "my-project",
+		Machine:              "test",
+		Agent:                "codex",
+		FirstMessage:         Ptr("hello world"),
+		StartedAt:            Ptr("2024-01-15T10:00:00Z"),
+		EndedAt:              Ptr("2024-01-15T10:30:00Z"),
+		MessageCount:         5,
+		UserMessageCount:     2,
+		TotalOutputTokens:    500,
+		PeakContextTokens:    1500,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
+		FilePath:             Ptr("/tmp/sessions/test.jsonl"),
+		FileSize:             Ptr(int64(4096)),
+		FileMtime:            Ptr(int64(999)),
 	}
 	requireNoError(t, d.UpsertSession(s), "upsert")
 
@@ -4563,6 +4942,20 @@ func TestGetSessionForIncremental(t *testing.T) {
 		if info.UserMsgCount != 2 {
 			t.Errorf("UserMsgCount = %d, want 2",
 				info.UserMsgCount)
+		}
+		if info.TotalOutputTokens != 500 {
+			t.Errorf("TotalOutputTokens = %d, want 500",
+				info.TotalOutputTokens)
+		}
+		if info.PeakContextTokens != 1500 {
+			t.Errorf("PeakContextTokens = %d, want 1500",
+				info.PeakContextTokens)
+		}
+		if !info.HasTotalOutputTokens {
+			t.Error("HasTotalOutputTokens = false, want true")
+		}
+		if !info.HasPeakContextTokens {
+			t.Error("HasPeakContextTokens = false, want true")
 		}
 	})
 
@@ -4592,6 +4985,53 @@ func TestGetSessionForIncremental(t *testing.T) {
 			)
 		}
 	})
+
+	t.Run("legacy_false_flags_repaired", func(t *testing.T) {
+		path := "/tmp/sessions/legacy-flags.jsonl"
+		_, err := d.getWriter().Exec(
+			`INSERT INTO sessions (
+				id, project, machine, agent,
+				message_count, user_message_count,
+				file_path, file_size, file_mtime,
+				total_output_tokens, peak_context_tokens,
+				has_total_output_tokens, has_peak_context_tokens
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+			"legacy-flags", "proj", "local", "claude",
+			2, 1, path, 1024, 100, 400, 900,
+		)
+		requireNoError(t, err, "insert legacy false flags")
+
+		info, ok := d.GetSessionForIncremental(path)
+		if !ok {
+			t.Fatal("expected legacy session for incremental")
+		}
+		if !info.HasTotalOutputTokens {
+			t.Error("HasTotalOutputTokens = false, want true")
+		}
+		if !info.HasPeakContextTokens {
+			t.Error("HasPeakContextTokens = false, want true")
+		}
+
+		err = d.UpdateSessionIncremental(
+			info.ID, nil, info.MsgCount+1, info.UserMsgCount,
+			info.FileSize+256, 200,
+			info.TotalOutputTokens+50, info.PeakContextTokens,
+			info.HasTotalOutputTokens, info.HasPeakContextTokens,
+		)
+		requireNoError(t, err, "UpdateSessionIncremental legacy")
+
+		got, err := d.GetSessionFull(context.Background(), info.ID)
+		requireNoError(t, err, "GetSessionFull legacy")
+		if got == nil {
+			t.Fatal("legacy session missing after incremental")
+		}
+		if !got.HasTotalOutputTokens {
+			t.Error("stored HasTotalOutputTokens = false, want true")
+		}
+		if !got.HasPeakContextTokens {
+			t.Error("stored HasPeakContextTokens = false, want true")
+		}
+	})
 }
 
 func TestUpdateSessionIncremental(t *testing.T) {
@@ -4599,27 +5039,31 @@ func TestUpdateSessionIncremental(t *testing.T) {
 
 	// Insert a session with all fields populated.
 	s := Session{
-		ID:               "inc-update",
-		Project:          "my-project",
-		Machine:          "test",
-		Agent:            "codex",
-		FirstMessage:     Ptr("hello"),
-		StartedAt:        Ptr("2024-01-15T10:00:00Z"),
-		MessageCount:     3,
-		UserMessageCount: 1,
-		ParentSessionID:  Ptr("parent-1"),
-		RelationshipType: "continuation",
-		FilePath:         Ptr("/tmp/sessions/update.jsonl"),
-		FileSize:         Ptr(int64(1024)),
-		FileMtime:        Ptr(int64(100)),
-		FileHash:         Ptr("abc123"),
+		ID:                   "inc-update",
+		Project:              "my-project",
+		Machine:              "test",
+		Agent:                "codex",
+		FirstMessage:         Ptr("hello"),
+		StartedAt:            Ptr("2024-01-15T10:00:00Z"),
+		MessageCount:         3,
+		UserMessageCount:     1,
+		ParentSessionID:      Ptr("parent-1"),
+		RelationshipType:     "continuation",
+		FilePath:             Ptr("/tmp/sessions/update.jsonl"),
+		FileSize:             Ptr(int64(1024)),
+		FileMtime:            Ptr(int64(100)),
+		FileHash:             Ptr("abc123"),
+		TotalOutputTokens:    300,
+		PeakContextTokens:    1200,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
 	}
 	requireNoError(t, d.UpsertSession(s), "upsert")
 
 	// Incremental update: bump counts and file metadata.
 	ended := "2024-01-15T10:30:00Z"
 	err := d.UpdateSessionIncremental(
-		"inc-update", &ended, 7, 3, 2048, 200, 0, 0,
+		"inc-update", &ended, 7, 3, 2048, 200, 500, 1600, true, true,
 	)
 	requireNoError(t, err, "incremental update")
 
@@ -4641,6 +5085,20 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	}
 	if got.FileSize == nil || *got.FileSize != 2048 {
 		t.Errorf("FileSize = %v, want 2048", got.FileSize)
+	}
+	if got.TotalOutputTokens != 500 {
+		t.Errorf("TotalOutputTokens = %d, want 500",
+			got.TotalOutputTokens)
+	}
+	if got.PeakContextTokens != 1600 {
+		t.Errorf("PeakContextTokens = %d, want 1600",
+			got.PeakContextTokens)
+	}
+	if !got.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens = false, want true")
+	}
+	if !got.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens = false, want true")
 	}
 
 	// Verify preserved fields were NOT cleared.
