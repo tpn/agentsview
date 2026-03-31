@@ -439,7 +439,7 @@ func (db *DB) backfillMessageTokenCoverageLocked(
 			"beginning message token backfill transaction: %w", err,
 		)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(
 		`UPDATE messages
@@ -581,10 +581,7 @@ func (db *DB) backfillSessionTokenCoverageLocked(
 
 	messageCoverage := map[string][2]bool{}
 	for start := 0; start < len(candidates); start += tokenCoverageBackfillBatchSize {
-		end := start + tokenCoverageBackfillBatchSize
-		if end > len(candidates) {
-			end = len(candidates)
-		}
+		end := min(start+tokenCoverageBackfillBatchSize, len(candidates))
 		batch := candidates[start:end]
 		args := make([]any, len(batch))
 		placeholders := make([]string, len(batch))
@@ -663,7 +660,7 @@ func (db *DB) backfillSessionTokenCoverageLocked(
 			"beginning session token backfill transaction: %w", err,
 		)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	stmt, err := tx.Prepare(
 		`UPDATE sessions

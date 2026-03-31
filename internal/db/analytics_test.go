@@ -367,6 +367,28 @@ func TestGetAnalyticsHeatmap(t *testing.T) {
 		}
 	})
 
+	t.Run("OutputTokensNoReporting", func(t *testing.T) {
+		// When no sessions report token coverage, the
+		// output_tokens heatmap must return empty entries
+		// rather than a zero-filled date grid.
+		resp := mustHeatmap(
+			t, d, ctx, baseFilter(), "output_tokens",
+		)
+		if resp.Metric != "output_tokens" {
+			t.Errorf(
+				"Metric = %q, want output_tokens",
+				resp.Metric,
+			)
+		}
+		if len(resp.Entries) != 0 {
+			t.Errorf(
+				"len(Entries) = %d, want 0 "+
+					"(no sessions report token coverage)",
+				len(resp.Entries),
+			)
+		}
+	})
+
 	t.Run("EmptyRange", func(t *testing.T) {
 		f := emptyFilter()
 		f.To = "2020-01-03"

@@ -767,10 +767,21 @@ func (db *DB) GetAnalyticsHeatmap(
 
 	// Choose which map to use based on metric
 	source := dayCounts
-	if metric == "sessions" {
+	switch metric {
+	case "sessions":
 		source = daySessions
-	} else if metric == "output_tokens" {
+	case "output_tokens":
 		source = dayOutputTokens
+	}
+
+	// For output_tokens, an empty source means no sessions
+	// reported token coverage. Return an empty heatmap so the
+	// UI can show "no data" instead of a misleading zero grid.
+	if metric == "output_tokens" && len(source) == 0 {
+		return HeatmapResponse{
+			Metric:      metric,
+			EntriesFrom: clampFrom(f.From, f.To),
+		}, nil
 	}
 
 	// Determine effective date range (clamped to MaxHeatmapDays)

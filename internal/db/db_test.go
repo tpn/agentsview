@@ -3795,6 +3795,95 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	}
 }
 
+func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB with session-level and message-level token data.
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
+		s.TotalOutputTokens = 5000
+		s.PeakContextTokens = 120000
+		s.HasTotalOutputTokens = true
+		s.HasPeakContextTokens = true
+	})
+	msg := asstMsg("s1", 0, "response")
+	msg.Model = "claude-opus-4-20250514"
+	msg.TokenUsage = json.RawMessage(
+		`{"output_tokens":500}`,
+	)
+	msg.ContextTokens = 80000
+	msg.OutputTokens = 500
+	msg.HasContextTokens = true
+	msg.HasOutputTokens = true
+	insertMessages(t, srcDB, msg)
+	srcDB.Close()
+
+	// Empty destination.
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	if count != 1 {
+		t.Fatalf("expected 1 orphaned, got %d", count)
+	}
+
+	// Session token metadata must survive the copy.
+	ctx := context.Background()
+	s, err := dstDB.GetSession(ctx, "s1")
+	requireNoError(t, err, "GetSession s1")
+	if s == nil {
+		t.Fatal("orphaned session s1 not found")
+	}
+	if s.TotalOutputTokens != 5000 {
+		t.Errorf("TotalOutputTokens = %d, want 5000",
+			s.TotalOutputTokens)
+	}
+	if s.PeakContextTokens != 120000 {
+		t.Errorf("PeakContextTokens = %d, want 120000",
+			s.PeakContextTokens)
+	}
+	if !s.HasTotalOutputTokens {
+		t.Error("HasTotalOutputTokens should be true")
+	}
+	if !s.HasPeakContextTokens {
+		t.Error("HasPeakContextTokens should be true")
+	}
+
+	// Message token metadata must survive the copy.
+	msgs, err := dstDB.GetMessages(ctx, "s1", 0, 100, true)
+	requireNoError(t, err, "GetMessages s1")
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	m := msgs[0]
+	if m.Model != "claude-opus-4-20250514" {
+		t.Errorf("Model = %q, want claude-opus-4-20250514",
+			m.Model)
+	}
+	if m.ContextTokens != 80000 {
+		t.Errorf("ContextTokens = %d, want 80000",
+			m.ContextTokens)
+	}
+	if m.OutputTokens != 500 {
+		t.Errorf("OutputTokens = %d, want 500",
+			m.OutputTokens)
+	}
+	if !m.HasContextTokens {
+		t.Error("HasContextTokens should be true")
+	}
+	if !m.HasOutputTokens {
+		t.Error("HasOutputTokens should be true")
+	}
+	if len(m.TokenUsage) == 0 {
+		t.Error("TokenUsage should be preserved")
+	}
+}
+
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 	d := testDB(t)
 

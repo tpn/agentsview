@@ -120,6 +120,15 @@ func (d *DB) CopyOrphanedDataFrom(
 	if oldDBHasColumn(ctx, tx, "messages", "is_system") {
 		msgCols += ", is_system"
 	}
+	for _, c := range []string{
+		"model", "token_usage", "context_tokens",
+		"output_tokens", "has_context_tokens",
+		"has_output_tokens",
+	} {
+		if oldDBHasColumn(ctx, tx, "messages", c) {
+			msgCols += ", " + c
+		}
+	}
 	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO messages ("+msgCols+") "+
 			"SELECT "+msgCols+" FROM old_db.messages "+
@@ -405,6 +414,14 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		cols = append(cols, "deleted_at")
 	}
 	cols = append(cols, "created_at")
+	for _, c := range []string{
+		"total_output_tokens", "peak_context_tokens",
+		"has_total_output_tokens", "has_peak_context_tokens",
+	} {
+		if oldDBHasColumn(ctx, tx, "sessions", c) {
+			cols = append(cols, c)
+		}
+	}
 	return strings.Join(cols, ", ")
 }
 

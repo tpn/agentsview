@@ -47,4 +47,3 @@ func (s *Server) handleGetMessages(
 		"count":    len(msgs),
 	})
 }
-

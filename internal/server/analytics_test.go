@@ -613,6 +613,35 @@ func TestAnalyticsHeatmap_OutputTokens(t *testing.T) {
 	}
 }
 
+func TestAnalyticsHeatmap_OutputTokensNoReporting(
+	t *testing.T,
+) {
+	te := setup(t)
+	// Seed standard analytics data (no token coverage).
+	seedAnalyticsEnv(t, te)
+
+	w := te.get(t, buildURLWithRange("heatmap", map[string]string{
+		"timezone": "UTC",
+		"metric":   "output_tokens",
+	}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[db.HeatmapResponse](t, w)
+	if resp.Metric != "output_tokens" {
+		t.Fatalf(
+			"Metric = %q, want output_tokens",
+			resp.Metric,
+		)
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf(
+			"len(Entries) = %d, want 0 "+
+				"(no sessions report token coverage)",
+			len(resp.Entries),
+		)
+	}
+}
+
 func TestAnalyticsProjects(t *testing.T) {
 	te := setup(t)
 	stats := seedAnalyticsEnv(t, te)
