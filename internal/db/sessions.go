@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 )
@@ -742,22 +741,6 @@ func (db *DB) GetSessionForIncremental(
 		info.HasTotalOutputTokens || info.TotalOutputTokens != 0
 	info.HasPeakContextTokens =
 		info.HasPeakContextTokens || info.PeakContextTokens != 0
-	if !info.HasTotalOutputTokens || !info.HasPeakContextTokens {
-		msgHasContext, msgHasOutput, err := db.SessionMessageTokenCoverage(
-			info.ID,
-		)
-		if err == nil {
-			info.HasTotalOutputTokens =
-				info.HasTotalOutputTokens || msgHasOutput
-			info.HasPeakContextTokens =
-				info.HasPeakContextTokens || msgHasContext
-		} else {
-			log.Printf(
-				"incremental token coverage fallback for %s: %v",
-				info.ID, err,
-			)
-		}
-	}
 	return &info, true
 }
 
