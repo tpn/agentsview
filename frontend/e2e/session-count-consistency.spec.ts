@@ -38,7 +38,7 @@ test.describe("Session count consistency", () => {
     // Wait for the summary to finish loading.
     const sessionsCard = summaryCards
       .locator(".card")
-      .filter({ has: page.locator(".card-label", { hasText: "Sessions" }) });
+      .filter({ has: page.locator(".card-label", { hasText: /^Sessions$/ }) });
     await expect(
       sessionsCard.locator(".card-value"),
     ).not.toHaveText("--", { timeout: 10_000 });
