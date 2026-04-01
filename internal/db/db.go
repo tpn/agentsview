@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 // dataVersion tracks parser changes that require a full
@@ -495,22 +497,23 @@ func (db *DB) messageTokenCoverageBackfillCandidatesLocked(
 	for rows.Next() {
 		var id int64
 		var tokenUsage string
-		var msg Message
+		var contextTokens, outputTokens int
+		var hasContextTokens, hasOutputTokens bool
 		if err := rows.Scan(
-			&id, &tokenUsage, &msg.ContextTokens,
-			&msg.OutputTokens, &msg.HasContextTokens,
-			&msg.HasOutputTokens,
+			&id, &tokenUsage, &contextTokens,
+			&outputTokens, &hasContextTokens,
+			&hasOutputTokens,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning message token backfill candidate: %w", err,
 			)
 		}
-		if tokenUsage != "" {
-			msg.TokenUsage = []byte(tokenUsage)
-		}
-		hasContext, hasOutput := msg.TokenPresence()
-		if hasContext == msg.HasContextTokens &&
-			hasOutput == msg.HasOutputTokens {
+		hasContext, hasOutput := parser.InferTokenPresence(
+			[]byte(tokenUsage), contextTokens, outputTokens,
+			hasContextTokens, hasOutputTokens,
+		)
+		if hasContext == hasContextTokens &&
+			hasOutput == hasOutputTokens {
 			continue
 		}
 		candidates = append(candidates, messageTokenCoverageBackfillCandidate{
@@ -536,6 +539,33 @@ const tokenCoverageBackfillBatchSize = 1000
 func (db *DB) backfillSessionTokenCoverageLocked(
 	w *sql.DB,
 ) (int, error) {
+	candidates, err := db.loadSessionCoverageCandidates(w)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	msgCoverage, err := db.batchLoadMessageCoverage(
+		w, candidates,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	updates := ComputeSessionCoverageUpdates(
+		candidates, msgCoverage,
+	)
+	if len(updates) == 0 {
+		return 0, nil
+	}
+	return db.applySessionCoverageUpdates(w, updates)
+}
+
+func (db *DB) loadSessionCoverageCandidates(
+	w *sql.DB,
+) ([]SessionCoverageCandidate, error) {
 	rows, err := w.Query(
 		`SELECT id, total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
@@ -544,60 +574,59 @@ func (db *DB) backfillSessionTokenCoverageLocked(
 		    OR has_peak_context_tokens = 0`,
 	)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"querying session token backfill candidates: %w", err,
 		)
 	}
-	type candidate struct {
-		id       string
-		total    int
-		peak     int
-		hasTotal bool
-		hasPeak  bool
-	}
-	var candidates []candidate
+	defer rows.Close()
+
+	var candidates []SessionCoverageCandidate
 	for rows.Next() {
-		var c candidate
+		var c SessionCoverageCandidate
 		if err := rows.Scan(
-			&c.id, &c.total, &c.peak, &c.hasTotal, &c.hasPeak,
+			&c.ID, &c.TotalOutputTokens,
+			&c.PeakContextTokens, &c.HasTotal, &c.HasPeak,
 		); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf(
-				"scanning session token backfill candidate: %w", err,
+			return nil, fmt.Errorf(
+				"scanning session token backfill candidate: %w",
+				err,
 			)
 		}
 		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
+		return nil, err
 	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	if len(candidates) == 0 {
-		return 0, nil
-	}
+	return candidates, nil
+}
 
-	messageCoverage := map[string][2]bool{}
+func (db *DB) batchLoadMessageCoverage(
+	w *sql.DB,
+	candidates []SessionCoverageCandidate,
+) (map[string][2]bool, error) {
+	coverage := map[string][2]bool{}
 	for start := 0; start < len(candidates); start += tokenCoverageBackfillBatchSize {
-		end := min(start+tokenCoverageBackfillBatchSize, len(candidates))
+		end := min(
+			start+tokenCoverageBackfillBatchSize,
+			len(candidates),
+		)
 		batch := candidates[start:end]
 		args := make([]any, len(batch))
 		placeholders := make([]string, len(batch))
-		for i, candidate := range batch {
-			args[i] = candidate.id
+		for i, c := range batch {
+			args[i] = c.ID
 			placeholders[i] = "?"
 		}
-		rows, err = w.Query(
-			`SELECT session_id, has_context_tokens, has_output_tokens
+		rows, err := w.Query(
+			`SELECT session_id, has_context_tokens,
+				has_output_tokens
 			 FROM messages
 			 WHERE session_id IN (`+strings.Join(placeholders, ",")+`)`,
 			args...,
 		)
 		if err != nil {
-			return 0, fmt.Errorf(
-				"querying session token backfill message coverage: %w", err,
+			return nil, fmt.Errorf(
+				"querying message coverage: %w", err,
 			)
 		}
 		for rows.Next() {
@@ -607,57 +636,35 @@ func (db *DB) backfillSessionTokenCoverageLocked(
 				&sessionID, &hasContext, &hasOutput,
 			); err != nil {
 				rows.Close()
-				return 0, fmt.Errorf(
-					"scanning session token message coverage: %w", err,
+				return nil, fmt.Errorf(
+					"scanning message coverage: %w", err,
 				)
 			}
-			coverage := messageCoverage[sessionID]
-			coverage[0] = coverage[0] || hasContext
-			coverage[1] = coverage[1] || hasOutput
-			messageCoverage[sessionID] = coverage
+			entry := coverage[sessionID]
+			entry[0] = entry[0] || hasContext
+			entry[1] = entry[1] || hasOutput
+			coverage[sessionID] = entry
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return 0, err
+			return nil, err
 		}
 		if err := rows.Close(); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
+	return coverage, nil
+}
 
-	updates := make([]struct {
-		id       string
-		hasTotal bool
-		hasPeak  bool
-	}, 0, len(candidates))
-	for _, candidate := range candidates {
-		coverage := messageCoverage[candidate.id]
-		backfilledTotal := candidate.hasTotal ||
-			candidate.total != 0 || coverage[1]
-		backfilledPeak := candidate.hasPeak ||
-			candidate.peak != 0 || coverage[0]
-		if backfilledTotal == candidate.hasTotal &&
-			backfilledPeak == candidate.hasPeak {
-			continue
-		}
-		updates = append(updates, struct {
-			id       string
-			hasTotal bool
-			hasPeak  bool
-		}{
-			id:       candidate.id,
-			hasTotal: backfilledTotal,
-			hasPeak:  backfilledPeak,
-		})
-	}
-	if len(updates) == 0 {
-		return 0, nil
-	}
-
+func (db *DB) applySessionCoverageUpdates(
+	w *sql.DB,
+	updates []SessionCoverageUpdate,
+) (int, error) {
 	tx, err := w.Begin()
 	if err != nil {
 		return 0, fmt.Errorf(
-			"beginning session token backfill transaction: %w", err,
+			"beginning session token backfill transaction: %w",
+			err,
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -675,13 +682,13 @@ func (db *DB) backfillSessionTokenCoverageLocked(
 	}
 	defer stmt.Close()
 
-	for _, candidate := range updates {
+	for _, u := range updates {
 		if _, err := stmt.Exec(
-			candidate.hasTotal, candidate.hasPeak, candidate.id,
+			u.HasTotal, u.HasPeak, u.ID,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"updating session token backfill %s: %w",
-				candidate.id, err,
+				u.ID, err,
 			)
 		}
 	}
