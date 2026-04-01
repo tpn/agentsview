@@ -5,6 +5,128 @@ import (
 	"testing"
 )
 
+func TestInferTokenPresence(t *testing.T) {
+	tests := []struct {
+		name        string
+		tokenUsage  []byte
+		contextToks int
+		outputToks  int
+		hasContext  bool
+		hasOutput   bool
+		wantCtx     bool
+		wantOut     bool
+	}{
+		{
+			name:       "explicit flags preserved, no data",
+			hasContext: true,
+			hasOutput:  true,
+			wantCtx:    true,
+			wantOut:    true,
+		},
+		{
+			name:        "non-zero contextTokens infers presence",
+			contextToks: 1000,
+			wantCtx:     true,
+			wantOut:     false,
+		},
+		{
+			name:       "non-zero outputTokens infers presence",
+			outputToks: 42,
+			wantCtx:    false,
+			wantOut:    true,
+		},
+		{
+			name:    "zero numerics, no flags -> false/false",
+			wantCtx: false,
+			wantOut: false,
+		},
+		{
+			name:       "json input_tokens key",
+			tokenUsage: []byte(`{"input_tokens": 100}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+		{
+			name:       "json output_tokens key",
+			tokenUsage: []byte(`{"output_tokens": 50}`),
+			wantCtx:    false,
+			wantOut:    true,
+		},
+		{
+			name:       "json cache_read_input_tokens key",
+			tokenUsage: []byte(`{"cache_read_input_tokens": 200}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+		{
+			name:       "json cache_creation_input_tokens key",
+			tokenUsage: []byte(`{"cache_creation_input_tokens": 10}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+		{
+			name:       "json both sides",
+			tokenUsage: []byte(`{"input_tokens": 100, "output_tokens": 50}`),
+			wantCtx:    true,
+			wantOut:    true,
+		},
+		{
+			name:       "malformed json ignored",
+			tokenUsage: []byte(`not-json`),
+			wantCtx:    false,
+			wantOut:    false,
+		},
+		{
+			name:       "empty json object",
+			tokenUsage: []byte(`{}`),
+			wantCtx:    false,
+			wantOut:    false,
+		},
+		{
+			name:       "gemini style input key",
+			tokenUsage: []byte(`{"input": 300}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+		{
+			name:       "gemini style output key",
+			tokenUsage: []byte(`{"output": 75}`),
+			wantCtx:    false,
+			wantOut:    true,
+		},
+		{
+			name:       "context_tokens json key",
+			tokenUsage: []byte(`{"context_tokens": 500}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+		{
+			name:       "cached json key",
+			tokenUsage: []byte(`{"cached": 30}`),
+			wantCtx:    true,
+			wantOut:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCtx, gotOut := InferTokenPresence(
+				tt.tokenUsage,
+				tt.contextToks,
+				tt.outputToks,
+				tt.hasContext,
+				tt.hasOutput,
+			)
+			if gotCtx != tt.wantCtx || gotOut != tt.wantOut {
+				t.Errorf(
+					"InferTokenPresence() = (%v, %v), want (%v, %v)",
+					gotCtx, gotOut, tt.wantCtx, tt.wantOut,
+				)
+			}
+		})
+	}
+}
+
 func TestAgentByType(t *testing.T) {
 	tests := []struct {
 		input AgentType

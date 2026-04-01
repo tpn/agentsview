@@ -371,22 +371,25 @@ func accumulateMessageTokenUsage(
 	}
 }
 
-// TokenPresence reports whether context/output token fields were
-// present in the provider payload. Falls back to raw token_usage
-// key inspection when parser-specific flags were not populated.
-func (m ParsedMessage) TokenPresence() (bool, bool) {
-	if m.tokenPresenceKnown {
-		return m.HasContextTokens, m.HasOutputTokens
-	}
+// InferTokenPresence determines whether context/output tokens were
+// present in a provider payload. It starts from explicit boolean
+// flags (and non-zero numeric values), then inspects tokenUsage JSON
+// keys when available. This is the single source of truth for token
+// presence inference across all storage backends.
+func InferTokenPresence(
+	tokenUsage []byte,
+	contextTokens, outputTokens int,
+	hasContext, hasOutput bool,
+) (bool, bool) {
+	hasContext = hasContext || contextTokens != 0
+	hasOutput = hasOutput || outputTokens != 0
 
-	hasContext := m.HasContextTokens
-	hasOutput := m.HasOutputTokens
-	if len(m.TokenUsage) == 0 {
+	if len(tokenUsage) == 0 {
 		return hasContext, hasOutput
 	}
 
 	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(m.TokenUsage, &payload); err != nil {
+	if err := json.Unmarshal(tokenUsage, &payload); err != nil {
 		return hasContext, hasOutput
 	}
 
@@ -401,6 +404,19 @@ func (m ParsedMessage) TokenPresence() (bool, bool) {
 		}
 	}
 	return hasContext, hasOutput
+}
+
+// TokenPresence reports whether context/output token fields were
+// present in the provider payload. Falls back to raw token_usage
+// key inspection when parser-specific flags were not populated.
+func (m ParsedMessage) TokenPresence() (bool, bool) {
+	if m.tokenPresenceKnown {
+		return m.HasContextTokens, m.HasOutputTokens
+	}
+	return InferTokenPresence(
+		m.TokenUsage, m.ContextTokens, m.OutputTokens,
+		m.HasContextTokens, m.HasOutputTokens,
+	)
 }
 
 // AggregateTokenPresence reports whether aggregate session token
