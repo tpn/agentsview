@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
 )
 
@@ -442,9 +443,36 @@ func backfillMessageTokenCoverage(
 }
 
 func backfillSessionTokenCoverage(
-	ctx context.Context, db *sql.DB,
+	ctx context.Context, conn *sql.DB,
 ) (int, error) {
-	rows, err := db.QueryContext(ctx,
+	candidates, err := loadPGSessionCoverageCandidates(ctx, conn)
+	if err != nil {
+		return 0, err
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	msgCoverage, err := batchLoadPGMessageCoverage(
+		ctx, conn, candidates,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	updates := db.ComputeSessionCoverageUpdates(
+		candidates, msgCoverage,
+	)
+	if len(updates) == 0 {
+		return 0, nil
+	}
+	return applyPGSessionCoverageUpdates(ctx, conn, updates)
+}
+
+func loadPGSessionCoverageCandidates(
+	ctx context.Context, conn *sql.DB,
+) ([]db.SessionCoverageCandidate, error) {
+	rows, err := conn.QueryContext(ctx,
 		`SELECT id, total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
 		 FROM sessions
@@ -452,60 +480,60 @@ func backfillSessionTokenCoverage(
 		    OR has_peak_context_tokens = FALSE`,
 	)
 	if err != nil {
-		return 0, fmt.Errorf(
-			"querying pg session token backfill candidates: %w", err,
+		return nil, fmt.Errorf(
+			"querying pg session token backfill candidates: %w",
+			err,
 		)
 	}
-	type candidate struct {
-		id       string
-		total    int
-		peak     int
-		hasTotal bool
-		hasPeak  bool
-	}
-	var candidates []candidate
+	defer rows.Close()
+
+	var candidates []db.SessionCoverageCandidate
 	for rows.Next() {
-		var c candidate
+		var c db.SessionCoverageCandidate
 		if err := rows.Scan(
-			&c.id, &c.total, &c.peak, &c.hasTotal, &c.hasPeak,
+			&c.ID, &c.TotalOutputTokens,
+			&c.PeakContextTokens, &c.HasTotal, &c.HasPeak,
 		); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf(
-				"scanning pg session token backfill candidate: %w", err,
+			return nil, fmt.Errorf(
+				"scanning pg session token backfill candidate: %w",
+				err,
 			)
 		}
 		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
+		return nil, err
 	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	if len(candidates) == 0 {
-		return 0, nil
-	}
+	return candidates, nil
+}
 
-	messageCoverage := map[string][2]bool{}
+func batchLoadPGMessageCoverage(
+	ctx context.Context, conn *sql.DB,
+	candidates []db.SessionCoverageCandidate,
+) (map[string][2]bool, error) {
+	coverage := map[string][2]bool{}
 	for start := 0; start < len(candidates); start += tokenCoverageBackfillBatchSize {
-		end := min(start+tokenCoverageBackfillBatchSize, len(candidates))
+		end := min(
+			start+tokenCoverageBackfillBatchSize,
+			len(candidates),
+		)
 		batch := candidates[start:end]
 		args := make([]any, len(batch))
 		placeholders := make([]string, len(batch))
-		for i, candidate := range batch {
-			args[i] = candidate.id
+		for i, c := range batch {
+			args[i] = c.ID
 			placeholders[i] = fmt.Sprintf("$%d", i+1)
 		}
-		rows, err = db.QueryContext(ctx,
-			`SELECT session_id, has_context_tokens, has_output_tokens
+		rows, err := conn.QueryContext(ctx,
+			`SELECT session_id, has_context_tokens,
+				has_output_tokens
 			 FROM messages
 			 WHERE session_id IN (`+strings.Join(placeholders, ",")+`)`,
 			args...,
 		)
 		if err != nil {
-			return 0, fmt.Errorf(
-				"querying pg session token backfill message coverage: %w", err,
+			return nil, fmt.Errorf(
+				"querying pg session message coverage: %w", err,
 			)
 		}
 		for rows.Next() {
@@ -515,28 +543,36 @@ func backfillSessionTokenCoverage(
 				&sessionID, &hasContext, &hasOutput,
 			); err != nil {
 				rows.Close()
-				return 0, fmt.Errorf(
-					"scanning pg session token message coverage: %w", err,
+				return nil, fmt.Errorf(
+					"scanning pg session message coverage: %w",
+					err,
 				)
 			}
-			coverage := messageCoverage[sessionID]
-			coverage[0] = coverage[0] || hasContext
-			coverage[1] = coverage[1] || hasOutput
-			messageCoverage[sessionID] = coverage
+			entry := coverage[sessionID]
+			entry[0] = entry[0] || hasContext
+			entry[1] = entry[1] || hasOutput
+			coverage[sessionID] = entry
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return 0, err
+			return nil, err
 		}
 		if err := rows.Close(); err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
+	return coverage, nil
+}
 
-	tx, err := db.BeginTx(ctx, nil)
+func applyPGSessionCoverageUpdates(
+	ctx context.Context, conn *sql.DB,
+	updates []db.SessionCoverageUpdate,
+) (int, error) {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf(
-			"beginning pg session token backfill transaction: %w", err,
+			"beginning pg session token backfill transaction: %w",
+			err,
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -555,22 +591,13 @@ func backfillSessionTokenCoverage(
 	defer stmt.Close()
 
 	updated := 0
-	for _, candidate := range candidates {
-		coverage := messageCoverage[candidate.id]
-		backfilledTotal := candidate.hasTotal ||
-			candidate.total != 0 || coverage[1]
-		backfilledPeak := candidate.hasPeak ||
-			candidate.peak != 0 || coverage[0]
-		if backfilledTotal == candidate.hasTotal &&
-			backfilledPeak == candidate.hasPeak {
-			continue
-		}
+	for _, u := range updates {
 		if _, err := stmt.ExecContext(
-			ctx, backfilledTotal, backfilledPeak, candidate.id,
+			ctx, u.HasTotal, u.HasPeak, u.ID,
 		); err != nil {
 			return updated, fmt.Errorf(
 				"updating pg session token backfill %s: %w",
-				candidate.id, err,
+				u.ID, err,
 			)
 		}
 		updated++
