@@ -715,45 +715,6 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 	return b.String(), rows.Err()
 }
 
-// SessionMessageTokenCoverage reports whether any stored message in the
-// session carries context/output token coverage.
-func (db *DB) SessionMessageTokenCoverage(
-	sessionID string,
-) (bool, bool, error) {
-	rows, err := db.getReader().Query(
-		`SELECT token_usage, context_tokens, output_tokens,
-			has_context_tokens, has_output_tokens
-		 FROM messages
-		 WHERE session_id = ?`,
-		sessionID,
-	)
-	if err != nil {
-		return false, false, err
-	}
-	defer rows.Close()
-
-	hasContext := false
-	hasOutput := false
-	for rows.Next() {
-		var tokenUsage string
-		var msg Message
-		if err := rows.Scan(
-			&tokenUsage,
-			&msg.ContextTokens, &msg.OutputTokens,
-			&msg.HasContextTokens, &msg.HasOutputTokens,
-		); err != nil {
-			return false, false, err
-		}
-		if tokenUsage != "" {
-			msg.TokenUsage = json.RawMessage(tokenUsage)
-		}
-		msgHasContext, msgHasOutput := msg.TokenPresence()
-		hasContext = hasContext || msgHasContext
-		hasOutput = hasOutput || msgHasOutput
-	}
-	return hasContext, hasOutput, rows.Err()
-}
-
 // ToolCallCount returns the number of tool_calls rows for a session.
 func (db *DB) ToolCallCount(sessionID string) (int, error) {
 	var n int
