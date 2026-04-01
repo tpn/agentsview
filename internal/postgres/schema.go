@@ -3,12 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"
@@ -589,27 +589,10 @@ func inferTokenCoverage(
 	contextTokens, outputTokens int,
 	hasContext, hasOutput bool,
 ) (bool, bool) {
-	hasContext = hasContext || contextTokens != 0
-	hasOutput = hasOutput || outputTokens != 0
-	if len(tokenUsage) == 0 {
-		return hasContext, hasOutput
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(tokenUsage, &payload); err != nil {
-		return hasContext, hasOutput
-	}
-	for key := range payload {
-		switch key {
-		case "input_tokens", "cache_creation_input_tokens",
-			"cache_read_input_tokens", "input",
-			"cached", "context_tokens":
-			hasContext = true
-		case "output_tokens", "output":
-			hasOutput = true
-		}
-	}
-	return hasContext, hasOutput
+	return parser.InferTokenPresence(
+		tokenUsage, contextTokens, outputTokens,
+		hasContext, hasOutput,
+	)
 }
 
 // CheckSchemaCompat verifies that the PG schema has all columns
