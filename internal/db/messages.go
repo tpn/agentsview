@@ -8,6 +8,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 const (
@@ -96,28 +98,10 @@ type Message struct {
 // falls back to non-zero numeric values for legacy rows, and inspects
 // raw token_usage payload keys to preserve zero-valued coverage.
 func (m Message) TokenPresence() (bool, bool) {
-	hasContext := m.HasContextTokens || m.ContextTokens != 0
-	hasOutput := m.HasOutputTokens || m.OutputTokens != 0
-	if len(m.TokenUsage) == 0 {
-		return hasContext, hasOutput
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(m.TokenUsage, &payload); err != nil {
-		return hasContext, hasOutput
-	}
-
-	for key := range payload {
-		switch key {
-		case "input_tokens", "cache_creation_input_tokens",
-			"cache_read_input_tokens", "input",
-			"cached", "context_tokens":
-			hasContext = true
-		case "output_tokens", "output":
-			hasOutput = true
-		}
-	}
-	return hasContext, hasOutput
+	return parser.InferTokenPresence(
+		m.TokenUsage, m.ContextTokens, m.OutputTokens,
+		m.HasContextTokens, m.HasOutputTokens,
+	)
 }
 
 // GetMessages returns paginated messages for a session.
