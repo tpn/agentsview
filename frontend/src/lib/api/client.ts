@@ -38,7 +38,7 @@ import type { SessionActivityResponse } from "./types/session-activity.js";
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
 
-function getBase(): string {
+export function getBase(): string {
   const server = getServerUrl();
   if (server) return `${server}/api/v1`;
   // Use the <base href> tag injected by --base-path so the app

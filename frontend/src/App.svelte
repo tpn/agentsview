@@ -28,7 +28,8 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
-  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
+  import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/client.js";
+  import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
 
@@ -312,9 +313,12 @@
     sync.checkForUpdate();
     sync.startPolling();
 
+    const healthCleanup = setupVisibilityHealthCheck(getBase);
+
     window.addEventListener("show-about", showAbout);
     const cleanup = registerShortcuts({ navigateMessage });
     return () => {
+      healthCleanup();
       cleanup();
       window.removeEventListener("show-about", showAbout);
       sync.stopPolling();

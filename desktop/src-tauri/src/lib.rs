@@ -91,6 +91,23 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
     let (rx, child) = spawn_sidecar(app)?;
 
     save_sidecar(app, child)?;
+
+    let focus_window = window.clone();
+    let focus_handle = app.handle().clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(true) = event {
+            let port = focus_handle
+                .state::<SidecarState>()
+                .backend_port
+                .lock()
+                .ok()
+                .and_then(|g| *g);
+            if let Some(port) = port {
+                recover_webview(&focus_window, port);
+            }
+        }
+    });
+
     forward_sidecar_logs(rx, window);
 
     Ok(())
@@ -528,6 +545,49 @@ fn main_window(app: &App) -> Result<WebviewWindow, DynError> {
 
 fn desktop_redirect_url(port: u16) -> String {
     format!("http://{HOST}:{port}?desktop=1")
+}
+
+/// Recover a dead or stale WebView on window focus.
+///
+/// Layer 1: try eval — if WKWebView content process was killed by
+/// macOS (sleep/wake, memory pressure), eval returns Err and we
+/// navigate to the backend URL which spawns a fresh content process.
+///
+/// Layer 2: if eval succeeds (content process alive), the injected
+/// JS pings the backend and reloads on failure — covers
+/// alive-but-disconnected WebViews.
+fn recover_webview(window: &WebviewWindow, port: u16) {
+    // Probe the sidecar at its absolute URL (not relative) so we
+    // always hit the correct port even if the WebView is still on
+    // a stale origin from a previous sidecar instance. No auth
+    // header — the local sidecar doesn't require it, and sending
+    // one to a random service on the old port would leak the token.
+    //
+    // Uses AbortController+setTimeout instead of AbortSignal.timeout
+    // for compatibility with older WebKit (macOS 12 / Safari 15).
+    let probe = format!("http://{HOST}:{port}/api/v1/version");
+    let target = desktop_redirect_url(port);
+    let health_js = format!(
+        "(function(){{\
+        var c=new AbortController();\
+        setTimeout(function(){{c.abort()}},3000);\
+        fetch('{probe}',{{signal:c.signal}})\
+        .then(function(r){{if(r.status>=500)throw r}})\
+        .catch(function(){{location.href='{target}'}})\
+        }})()"
+    );
+    match window.eval(health_js) {
+        Ok(()) => {}
+        Err(err) => {
+            eprintln!(
+                "[agentsview] WebView eval failed, recovering: {err}"
+            );
+            let url = desktop_redirect_url(port);
+            if let Ok(parsed) = Url::parse(url.as_str()) {
+                let _ = window.navigate(parsed);
+            }
+        }
+    }
 }
 
 fn redirect_when_ready(window: WebviewWindow, port: u16) {
