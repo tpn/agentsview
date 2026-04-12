@@ -354,6 +354,70 @@ func TestGetDailyUsageNoPricing(t *testing.T) {
 	}
 }
 
+// TestGetDailyUsageTruncatedTokenJSON documents what happens when
+// a message lands in the DB with truncated token_usage — gjson is
+// permissive and still extracts the leading fields, so the valid
+// data is preserved. This is why we don't run gjson.Valid on the
+// hot aggregation path: the realistic corruption modes reachable
+// from our parsers don't produce silent zeros.
+func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "sess1", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-06-15T10:00:00Z")
+	})
+
+	insertMessages(t, d,
+		Message{
+			SessionID: "sess1", Ordinal: 0,
+			Role:      "assistant",
+			Timestamp: "2024-06-15T10:30:00Z",
+			Model:     "claude-sonnet-4-20250514",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":500}`),
+		},
+		Message{
+			SessionID: "sess1", Ordinal: 1,
+			Role:      "assistant",
+			Timestamp: "2024-06-15T10:31:00Z",
+			Model:     "claude-sonnet-4-20250514",
+			// Truncated mid-key. gjson still finds the two
+			// leading numeric fields and extracts them.
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":9999,"output_tokens":4242,"ca`),
+		},
+	)
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2024-06-01",
+		To:   "2024-06-30",
+	})
+	requireNoError(t, err, "GetDailyUsage truncated")
+
+	if len(result.Daily) != 1 {
+		t.Fatalf("got %d daily entries, want 1",
+			len(result.Daily))
+	}
+	day := result.Daily[0]
+	// 1000 (valid row) + 9999 (truncated but still parseable)
+	if day.InputTokens != 10999 {
+		t.Errorf("InputTokens = %d, want 10999 "+
+			"(gjson should extract leading fields from truncated JSON)",
+			day.InputTokens)
+	}
+	if day.OutputTokens != 4742 {
+		t.Errorf("OutputTokens = %d, want 4742", day.OutputTokens)
+	}
+}
+
 func TestGetDailyUsageLongLivedSession(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

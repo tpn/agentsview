@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // UsageFilter controls the date range, agent, and timezone
@@ -65,6 +67,49 @@ type DailyUsageResult struct {
 	Totals UsageTotals       `json:"totals"`
 }
 
+// modelRates holds per-model pricing in rate-per-token form.
+type modelRates struct {
+	input         float64
+	output        float64
+	cacheCreation float64
+	cacheRead     float64
+}
+
+// loadPricingMap reads the model_pricing table into a map for
+// in-memory joins. This is much faster than a SQL LEFT JOIN
+// on every row of the daily usage scan, since the pricing
+// table is tiny (a few dozen rows) and lookups are O(1).
+func (db *DB) loadPricingMap(
+	ctx context.Context,
+) (map[string]modelRates, error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT model_pattern,
+			input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok
+		 FROM model_pricing`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]modelRates)
+	for rows.Next() {
+		var (
+			pattern string
+			rates   modelRates
+		)
+		if err := rows.Scan(
+			&pattern,
+			&rates.input, &rates.output,
+			&rates.cacheCreation, &rates.cacheRead,
+		); err != nil {
+			return nil, err
+		}
+		out[pattern] = rates
+	}
+	return out, rows.Err()
+}
+
 // paddedUTCBound pads a UTC timestamp by hours to cover timezone
 // offsets. Positive hours pad forward, negative pad backward.
 func paddedUTCBound(ts string, hours int) string {
@@ -76,28 +121,28 @@ func paddedUTCBound(ts string, hours int) string {
 }
 
 // GetDailyUsage returns token usage and cost aggregated by day.
-// It joins messages with sessions and model_pricing to compute
-// per-row costs, then buckets by local date.
+// It scans messages with non-empty token_usage JSON blobs,
+// parses them in Go (faster than SQLite's json_extract per row),
+// joins against an in-memory pricing map, and buckets by
+// local date.
 func (db *DB) GetDailyUsage(
 	ctx context.Context, f UsageFilter,
 ) (DailyUsageResult, error) {
 	loc := f.location()
 
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return DailyUsageResult{},
+			fmt.Errorf("loading pricing: %w", err)
+	}
+
 	query := `
 SELECT
 	COALESCE(m.timestamp, s.started_at) as ts,
 	m.model,
-	COALESCE(json_extract(m.token_usage, '$.input_tokens'), 0),
-	COALESCE(json_extract(m.token_usage, '$.output_tokens'), 0),
-	COALESCE(json_extract(m.token_usage, '$.cache_creation_input_tokens'), 0),
-	COALESCE(json_extract(m.token_usage, '$.cache_read_input_tokens'), 0),
-	COALESCE(p.input_per_mtok, 0),
-	COALESCE(p.output_per_mtok, 0),
-	COALESCE(p.cache_creation_per_mtok, 0),
-	COALESCE(p.cache_read_per_mtok, 0)
+	m.token_usage
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
-LEFT JOIN model_pricing p ON m.model = p.model_pattern
 WHERE m.token_usage != ''
 	AND m.model != ''
 	AND m.model != '<synthetic>'
@@ -146,21 +191,13 @@ WHERE m.token_usage != ''
 
 	accum := make(map[dateModelKey]*modelAccum)
 
+	var (
+		ts        string
+		model     string
+		tokenJSON string
+	)
 	for rows.Next() {
-		var (
-			ts                       string
-			model                    string
-			inputTok, outputTok      int
-			cacheCrTok, cacheRdTok   int
-			inputRate, outputRate    float64
-			cacheCrRate, cacheRdRate float64
-		)
-		if err := rows.Scan(
-			&ts, &model,
-			&inputTok, &outputTok, &cacheCrTok, &cacheRdTok,
-			&inputRate, &outputRate,
-			&cacheCrRate, &cacheRdRate,
-		); err != nil {
+		if err := rows.Scan(&ts, &model, &tokenJSON); err != nil {
 			return DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", err)
 		}
@@ -173,10 +210,25 @@ WHERE m.token_usage != ''
 			continue
 		}
 
-		cost := (float64(inputTok)*inputRate +
-			float64(outputTok)*outputRate +
-			float64(cacheCrTok)*cacheCrRate +
-			float64(cacheRdTok)*cacheRdRate) / 1_000_000
+		// token_usage is written by our parsers and never by
+		// user input, so we trust it to be valid JSON. gjson
+		// is permissive enough that a truncated-tail row still
+		// yields its leading fields; a fully garbage row would
+		// return zeros, but that path is not reachable from
+		// any known parser. Skipping gjson.Valid here preserves
+		// the hot-path speedup (O(n) per row → not free on a
+		// 310k-row scan).
+		usage := gjson.Parse(tokenJSON)
+		inputTok := int(usage.Get("input_tokens").Int())
+		outputTok := int(usage.Get("output_tokens").Int())
+		cacheCrTok := int(usage.Get("cache_creation_input_tokens").Int())
+		cacheRdTok := int(usage.Get("cache_read_input_tokens").Int())
+
+		rates := pricing[model]
+		cost := (float64(inputTok)*rates.input +
+			float64(outputTok)*rates.output +
+			float64(cacheCrTok)*rates.cacheCreation +
+			float64(cacheRdTok)*rates.cacheRead) / 1_000_000
 
 		key := dateModelKey{date: date, model: model}
 		ma, ok := accum[key]

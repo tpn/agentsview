@@ -3,9 +3,61 @@ package main
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/wesm/agentsview/internal/db"
 )
+
+func TestResolveDefaultSince(t *testing.T) {
+	now := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
+	const utc = "UTC"
+
+	tests := []struct {
+		name  string
+		since string
+		until string
+		all   bool
+		want  string
+	}{
+		{
+			name: "no flags returns 30-day window",
+			want: "2024-05-17",
+		},
+		{
+			name:  "explicit since preserved",
+			since: "2024-01-01",
+			want:  "2024-01-01",
+		},
+		{
+			name: "all flag disables default",
+			all:  true,
+			want: "",
+		},
+		{
+			name:  "until without since does not backfill since",
+			until: "2024-01-31",
+			want:  "",
+		},
+		{
+			name:  "explicit range preserved",
+			since: "2024-01-01",
+			until: "2024-01-31",
+			want:  "2024-01-01",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveDefaultSince(
+				tc.since, tc.until, tc.all, now, utc,
+			)
+			if got != tc.want {
+				t.Errorf("resolveDefaultSince = %q, want %q",
+					got, tc.want)
+			}
+		})
+	}
+}
 
 func TestFormatDailyUsageJSON(t *testing.T) {
 	result := db.DailyUsageResult{

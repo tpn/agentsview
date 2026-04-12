@@ -46,6 +46,32 @@ func runUsage(args []string) {
 	}
 }
 
+// defaultUsageDays is the default lookback window for
+// `agentsview usage daily` when neither --since nor --all is
+// given. Matches ccusage's default and avoids scanning the
+// full history when users usually want recent spend.
+const defaultUsageDays = 30
+
+// resolveDefaultSince returns the effective --since value,
+// applying a 30-day lookback only when the caller gave no
+// explicit range at all. If --until is set we leave --since
+// empty so "everything up to --until" still works; otherwise
+// a bare --until would produce From > To and empty results.
+func resolveDefaultSince(
+	since, until string, all bool, now time.Time, tz string,
+) string {
+	if since != "" || until != "" || all {
+		return since
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		loc = time.Local
+	}
+	return now.In(loc).
+		AddDate(0, 0, -(defaultUsageDays - 1)).
+		Format("2006-01-02")
+}
+
 func runUsageDaily(args []string) {
 	fs := flag.NewFlagSet("usage daily", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false,
@@ -54,6 +80,8 @@ func runUsageDaily(args []string) {
 		"Start date (YYYY-MM-DD)")
 	until := fs.String("until", "",
 		"End date (YYYY-MM-DD)")
+	all := fs.Bool("all", false,
+		"Include all history (overrides default 30-day window)")
 	agent := fs.String("agent", "",
 		"Filter by agent (claude, codex)")
 	breakdown := fs.Bool("breakdown", false,
@@ -80,8 +108,12 @@ func runUsageDaily(args []string) {
 		tz = localTimezone()
 	}
 
+	effectiveSince := resolveDefaultSince(
+		*since, *until, *all, time.Now(), tz,
+	)
+
 	filter := db.UsageFilter{
-		From:     *since,
+		From:     effectiveSince,
 		To:       *until,
 		Agent:    *agent,
 		Timezone: tz,
@@ -340,8 +372,9 @@ Commands:
 
 Daily flags:
   --json              Output as JSON
-  --since YYYY-MM-DD  Start date
+  --since YYYY-MM-DD  Start date (default: 30 days ago)
   --until YYYY-MM-DD  End date
+  --all               Include all history (overrides default window)
   --agent string      Filter by agent (claude, codex)
   --breakdown         Show per-model breakdown rows
   --offline           Use fallback pricing only
