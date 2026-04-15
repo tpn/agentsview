@@ -131,10 +131,12 @@ func runServe(cfg config.Config) {
 	// background LiteLLM refresh follows immediately.
 	seedPricing(database)
 
-	// When auth is required, ensure a token exists and auto-bind to
-	// 0.0.0.0 so the server is reachable from the network.
+	// When auth is required, ensure a token exists. Auto-bind to
+	// 0.0.0.0 unless the user set --host explicitly or a managed
+	// proxy is active (Caddy requires a loopback backend).
 	if cfg.RequireAuth {
-		if !cfg.HostExplicit && cfg.Host == "127.0.0.1" {
+		if !cfg.HostExplicit && cfg.Host == "127.0.0.1" &&
+			cfg.Proxy.Mode == "" {
 			cfg.Host = "0.0.0.0"
 		}
 		if err := cfg.EnsureAuthToken(); err != nil {
