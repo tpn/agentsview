@@ -137,6 +137,9 @@ func (s *Sync) Push(
 			}
 		}
 	}
+	if err := s.syncModelPricing(ctx); err != nil {
+		return result, err
+	}
 
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 

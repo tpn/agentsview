@@ -70,6 +70,15 @@ CREATE TABLE IF NOT EXISTS messages (
         REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS model_pricing (
+    model_pattern TEXT PRIMARY KEY,
+    input_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
+    output_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cache_creation_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS tool_calls (
     id                    BIGSERIAL PRIMARY KEY,
     session_id            TEXT NOT NULL,
