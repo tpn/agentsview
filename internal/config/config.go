@@ -79,7 +79,7 @@ type Config struct {
 	GithubToken          string         `json:"github_token,omitempty" toml:"github_token"`
 	Terminal             TerminalConfig `json:"terminal,omitempty" toml:"terminal"`
 	AuthToken            string         `json:"auth_token,omitempty" toml:"auth_token"`
-	RemoteAccess         bool           `json:"remote_access" toml:"remote_access"`
+	RequireAuth          bool           `json:"require_auth" toml:"require_auth"`
 	NoBrowser            bool           `json:"no_browser" toml:"no_browser"`
 	DisableUpdateCheck   bool           `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool           `json:"-" toml:"-"`
@@ -242,7 +242,7 @@ func loadPGServeBase() (Config, error) {
 	cfg.PublicURL = ""
 	cfg.PublicOrigins = nil
 	cfg.Proxy = ProxyConfig{}
-	cfg.RemoteAccess = false
+	cfg.RequireAuth = false
 	cfg.NoBrowser = false
 	cfg.HostExplicit = false
 	return cfg, nil
@@ -335,6 +335,7 @@ func (c *Config) loadFile() error {
 		ResultContentBlockedCategories []string       `toml:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig `toml:"terminal"`
 		AuthToken                      string         `toml:"auth_token"`
+		RequireAuth                    bool           `toml:"require_auth"`
 		RemoteAccess                   bool           `toml:"remote_access"`
 		DisableUpdateCheck             bool           `toml:"disable_update_check"`
 		PG                             PGConfig       `toml:"pg"`
@@ -372,7 +373,7 @@ func (c *Config) loadFile() error {
 	if file.AuthToken != "" {
 		c.AuthToken = file.AuthToken
 	}
-	c.RemoteAccess = file.RemoteAccess
+	c.RequireAuth = file.RequireAuth || file.RemoteAccess
 	c.DisableUpdateCheck = file.DisableUpdateCheck
 	// Merge pg field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -1139,16 +1140,16 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 			c.AuthToken = s
 		}
 	}
-	if v, ok := patch["remote_access"]; ok {
+	if v, ok := patch["require_auth"]; ok {
 		if b, ok := v.(bool); ok {
-			c.RemoteAccess = b
+			c.RequireAuth = b
 		}
 	}
 	return nil
 }
 
 // EnsureAuthToken generates and persists an auth token if one does
-// not already exist. Called when remote_access is enabled.
+// not already exist. Called when require_auth is enabled.
 func (c *Config) EnsureAuthToken() error {
 	if c.AuthToken != "" {
 		return nil

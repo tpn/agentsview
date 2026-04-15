@@ -1576,8 +1576,8 @@ func TestHostHeaderBindAllPort80AllowsPortlessLANIP(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
-				// LAN access now requires remote_access + auth token.
-				c.RemoteAccess = true
+				// LAN access requires require_auth + auth token.
+				c.RequireAuth = true
 				c.AuthToken = "test-token"
 			})
 
@@ -1693,8 +1693,8 @@ func TestHostHeaderBindAllAllowsLANIP(t *testing.T) {
 		t.Run(bindHost, func(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
-				// LAN access now requires remote_access + auth token.
-				c.RemoteAccess = true
+				// LAN access requires require_auth + auth token.
+				c.RequireAuth = true
 				c.AuthToken = "test-token"
 			})
 
@@ -1837,7 +1837,7 @@ func TestCORSAllowMethods(t *testing.T) {
 func TestAuthErrorIncludesCORSHeaders(t *testing.T) {
 	te := setup(t, func(c *config.Config) {
 		c.Host = "0.0.0.0"
-		c.RemoteAccess = true
+		c.RequireAuth = true
 		c.AuthToken = "secret-token"
 	})
 
@@ -1864,7 +1864,7 @@ func TestAuthErrorIncludesCORSHeaders(t *testing.T) {
 func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
 	te := setup(t, func(c *config.Config) {
 		c.Host = "0.0.0.0"
-		c.RemoteAccess = true
+		c.RequireAuth = true
 		c.AuthToken = "secret-token"
 	})
 
@@ -1887,27 +1887,29 @@ func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
 	}
 }
 
-func TestForbiddenNoCORSWhenRemoteDisabled(t *testing.T) {
+func TestNoAuthWhenRemoteDisabled(t *testing.T) {
 	te := setup(t, func(c *config.Config) {
 		c.Host = "0.0.0.0"
-		// remote_access is false — non-loopback requests are
-		// rejected with 403 and no CORS headers.
+		// require_auth is false — auth is not enforced, so
+		// non-loopback requests pass through without a token.
 	})
 
 	req := httptest.NewRequest(
 		http.MethodGet, "/api/v1/stats", nil,
 	)
-	req.Header.Set("Origin", "http://192.168.1.50:8080")
+	// Use localhost Host header to pass host-check; the point
+	// of this test is that auth middleware doesn't block when
+	// require_auth is off.
+	req.Host = "127.0.0.1:0"
 	req.RemoteAddr = "192.168.1.50:9999"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
-	assertStatus(t, w, http.StatusForbidden)
 
-	cors := w.Header().Get("Access-Control-Allow-Origin")
-	if cors != "" {
+	if w.Code == http.StatusForbidden ||
+		w.Code == http.StatusUnauthorized {
 		t.Fatalf(
-			"expected no CORS on 403 when remote disabled, got %q",
-			cors,
+			"expected no auth gate when remote disabled, got %d",
+			w.Code,
 		)
 	}
 }

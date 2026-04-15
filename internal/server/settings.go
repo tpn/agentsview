@@ -16,7 +16,7 @@ type settingsResponse struct {
 	Host             string              `json:"host"`
 	Port             int                 `json:"port"`
 	AuthToken        string              `json:"auth_token,omitempty"`
-	RemoteAccess     bool                `json:"remote_access"`
+	RequireAuth      bool                `json:"require_auth"`
 }
 
 // terminalResponse mirrors config.TerminalConfig for JSON output.
@@ -59,7 +59,7 @@ func (s *Server) handleGetSettings(
 		GithubConfigured: s.cfg.GithubToken != "",
 		Host:             s.cfg.Host,
 		Port:             s.cfg.Port,
-		RemoteAccess:     s.cfg.RemoteAccess,
+		RequireAuth:      s.cfg.RequireAuth,
 	}
 
 	// Only expose auth_token to localhost requests, never to remote clients.
@@ -74,9 +74,9 @@ func (s *Server) handleGetSettings(
 // settingsUpdateRequest is the JSON body for PUT /api/v1/settings.
 // All fields are optional; only non-nil fields are applied.
 type settingsUpdateRequest struct {
-	Terminal     *terminalResponse `json:"terminal,omitempty"`
-	AuthToken    *string           `json:"auth_token,omitempty"`
-	RemoteAccess *bool             `json:"remote_access,omitempty"`
+	Terminal    *terminalResponse `json:"terminal,omitempty"`
+	AuthToken   *string           `json:"auth_token,omitempty"`
+	RequireAuth *bool             `json:"require_auth,omitempty"`
 }
 
 func (s *Server) handleUpdateSettings(
@@ -110,8 +110,8 @@ func (s *Server) handleUpdateSettings(
 		patch["auth_token"] = *req.AuthToken
 	}
 
-	if req.RemoteAccess != nil {
-		patch["remote_access"] = *req.RemoteAccess
+	if req.RequireAuth != nil {
+		patch["require_auth"] = *req.RequireAuth
 	}
 
 	if len(patch) == 0 {
@@ -122,8 +122,8 @@ func (s *Server) handleUpdateSettings(
 
 	s.mu.Lock()
 	err := s.cfg.SaveSettings(patch)
-	// Auto-generate auth token when remote_access is enabled.
-	if err == nil && s.cfg.RemoteAccess {
+	// Auto-generate auth token when require_auth is enabled.
+	if err == nil && s.cfg.RequireAuth {
 		err = s.cfg.EnsureAuthToken()
 	}
 	s.mu.Unlock()

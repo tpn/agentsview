@@ -36,8 +36,8 @@ func (f fakeFileInfo) Mode() os.FileMode { return 0 }
 func (f fakeFileInfo) ModTime() time.Time {
 	return time.Unix(0, f.mtime)
 }
-func (f fakeFileInfo) IsDir() bool      { return false }
-func (f fakeFileInfo) Sys() any         { return nil }
+func (f fakeFileInfo) IsDir() bool { return false }
+func (f fakeFileInfo) Sys() any    { return nil }
 
 func TestFilterEmptyMessages(t *testing.T) {
 	tests := []struct {
@@ -716,12 +716,12 @@ func TestApplyRemoteRewrites(t *testing.T) {
 					},
 				},
 			},
-			wantSessID:  "host~abc",
-			wantParent:  strPtr("host~parent-1"),
+			wantSessID:   "host~abc",
+			wantParent:   strPtr("host~parent-1"),
 			wantFilePath: strPtr("/tmp/file"),
-			wantMsgSess: "host~abc",
-			wantSubs:    []string{"host~sub-1", ""},
-			wantEvSubs:  []string{"host~ev-1", ""},
+			wantMsgSess:  "host~abc",
+			wantSubs:     []string{"host~sub-1", ""},
+			wantEvSubs:   []string{"host~ev-1", ""},
 		},
 		{
 			name:   "path rewriter applied",

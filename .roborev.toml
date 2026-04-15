@@ -11,9 +11,9 @@ Key assumptions reviewers MUST account for:
 1. AUTH MODEL: In local-only mode, loopback bind is the access
    boundary — no auth tokens needed. In proxy mode, validateServeConfig
    forces the backend to loopback; Caddy enforces CIDR subnet
-   allowlisting. When remote access is enabled (`remote_access: true`),
-   a bearer token is required for all API requests (including
-   localhost, to prevent bypass via reverse proxy). An auth token is
+   allowlisting. When auth is required (`require_auth: true`), a
+   bearer token is required for all API requests (including localhost,
+   to prevent bypass via reverse proxy). An auth token is
    auto-generated at startup if missing. Do not flag missing auth on
    local-only code paths. DO flag any path that lets the backend bind
    non-loopback in proxy mode, or missing subnet checks for

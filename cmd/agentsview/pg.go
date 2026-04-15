@@ -205,15 +205,11 @@ func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func runPGServe(appCfg config.Config, basePath string) {
 	setupLogFile(appCfg.DataDir)
-	// Enable remote access with auth when binding to a
-	// non-loopback address; keep it off for localhost.
-	if !isLoopbackHost(appCfg.Host) {
-		appCfg.RemoteAccess = true
+	// Generate auth token when auth is explicitly required.
+	if appCfg.RequireAuth {
 		if err := appCfg.EnsureAuthToken(); err != nil {
 			fatal("pg serve: generating auth token: %v", err)
 		}
-	} else {
-		appCfg.RemoteAccess = false
 	}
 
 	if err := validateServeConfig(appCfg); err != nil {
@@ -300,7 +296,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 		fatal("pg serve: %v", err)
 	}
 
-	if rt.Cfg.RemoteAccess && rt.Cfg.AuthToken != "" {
+	if rt.Cfg.RequireAuth && rt.Cfg.AuthToken != "" {
 		fmt.Printf("Auth token: %s\n", rt.Cfg.AuthToken)
 	}
 	if rt.PublicURL == rt.LocalURL {

@@ -649,7 +649,7 @@ export interface AppSettings {
   host: string;
   port: number;
   auth_token?: string;
-  remote_access?: boolean;
+  require_auth?: boolean;
 }
 
 export function getSettings(): Promise<AppSettings> {

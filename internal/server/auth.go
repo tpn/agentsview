@@ -11,9 +11,9 @@ import (
 type contextKey int
 
 const (
-	// ctxKeyRemoteAuth indicates the request is from an authenticated
-	// remote client. When set to true, host-check and CORS middleware
-	// skip their restrictions.
+	// ctxKeyRemoteAuth indicates the request passed token auth.
+	// When set to true, host-check and CORS middleware skip
+	// their restrictions.
 	ctxKeyRemoteAuth contextKey = iota
 )
 
@@ -39,9 +39,9 @@ func isLocalhostRequest(r *http.Request) bool {
 	return ip.IsLoopback()
 }
 
-// authMiddleware enforces Bearer token authentication for remote
-// API requests. Localhost connections always bypass auth for backward
-// compatibility. Non-API routes (static assets) are never gated.
+// authMiddleware enforces Bearer token authentication when
+// require_auth is enabled. Non-API routes (static assets) are
+// never gated.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Only gate /api/ routes — static assets are always served.
@@ -53,17 +53,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Read config once for all checks below.
 		s.mu.RLock()
 		token := s.cfg.AuthToken
-		remoteEnabled := s.cfg.RemoteAccess
+		authRequired := s.cfg.RequireAuth
 		s.mu.RUnlock()
 
 		// CORS preflight requests (OPTIONS) never include credentials.
 		// Let them through so the browser can negotiate CORS before
-		// sending the authenticated request. When remote access is
-		// enabled with a token, mark OPTIONS as remote-auth so the
-		// CORS middleware allows the preflight for cross-origin
-		// remote clients.
+		// sending the authenticated request. When auth is required,
+		// mark OPTIONS as authenticated so the CORS middleware
+		// allows the preflight for cross-origin clients.
 		if r.Method == http.MethodOptions {
-			if remoteEnabled && token != "" {
+			if authRequired && token != "" {
 				ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
@@ -72,33 +71,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Localhost bypass: when remote access is disabled, local
-		// connections skip auth for backward compatibility. When
-		// remote access is enabled with a token, localhost must also
-		// authenticate — this prevents bypass via reverse proxy or
-		// SSH port-forward where remote clients appear as 127.0.0.1.
-		if isLocalhostRequest(r) {
-			if !remoteEnabled || token == "" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			// Fall through to token check below.
-		}
-
-		// When remote access is not enabled, reject non-loopback
-		// requests outright. This prevents unauthenticated LAN
-		// access when the server is bound to 0.0.0.0. No CORS
-		// headers — cross-origin requests are not expected when
-		// remote access is off.
-		if !remoteEnabled {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-		// Remote access enabled but no token configured yet — reject.
-		// No CORS headers — this is a server misconfiguration, not
-		// an auth challenge the client can resolve with a token.
-		if token == "" {
-			http.Error(w, "Forbidden", http.StatusForbidden)
+		// When auth is not required, skip token checks entirely.
+		// Users on private networks (Tailscale, VPN, LAN) don't
+		// need token auth; they opt in with require_auth=true.
+		if !authRequired || token == "" {
+			next.ServeHTTP(w, r)
 			return
 		}
 

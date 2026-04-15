@@ -71,7 +71,7 @@
   async function handleToggleRemote() {
     remoteToggling = true;
     try {
-      await settings.save({ remote_access: !settings.remoteAccess });
+      await settings.save({ require_auth: !settings.requireAuth });
     } finally {
       remoteToggling = false;
     }
@@ -92,22 +92,22 @@
   {#if !isRemote}
     <div class="subsection">
       <div class="toggle-row">
-        <span class="toggle-label">Allow remote connections</span>
+        <span class="toggle-label">Require auth token</span>
         <button
           class="toggle-btn"
-          class:active={settings.remoteAccess}
+          class:active={settings.requireAuth}
           disabled={remoteToggling}
           onclick={handleToggleRemote}
         >
-          {settings.remoteAccess ? "Enabled" : "Disabled"}
+          {settings.requireAuth ? "Enabled" : "Disabled"}
         </button>
       </div>
 
       <p class="restart-note">
-        Note: Toggling remote access requires a server restart to take effect.
+        Note: Toggling auth requires a server restart to take effect.
       </p>
 
-      {#if settings.remoteAccess && settings.authToken}
+      {#if settings.requireAuth && settings.authToken}
         <div class="security-warning">
           Warning: Remote connections use unencrypted HTTP. Use a secure
           tunnel (Tailscale, SSH tunnel, or a reverse proxy with TLS) to
