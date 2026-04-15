@@ -72,10 +72,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// When auth is not required, skip token checks entirely.
-		// Users on private networks (Tailscale, VPN, LAN) don't
-		// need token auth; they opt in with require_auth=true.
-		if !authRequired || token == "" {
+		if !authRequired {
 			next.ServeHTTP(w, r)
+			return
+		}
+		// Auth required but no token configured — fail closed.
+		if token == "" {
+			http.Error(w,
+				"server misconfiguration: auth required but no token set",
+				http.StatusInternalServerError)
 			return
 		}
 

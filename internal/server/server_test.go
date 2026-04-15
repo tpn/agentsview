@@ -1914,6 +1914,28 @@ func TestNoAuthWhenRemoteDisabled(t *testing.T) {
 	}
 }
 
+func TestAuthRequiredButNoToken(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		c.RequireAuth = true
+		// AuthToken intentionally left empty.
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Host = "127.0.0.1:0"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"expected 500 when auth required but no token, got %d",
+			w.Code,
+		)
+	}
+}
+
 func TestGetGithubConfig(t *testing.T) {
 	te := setup(t)
 
