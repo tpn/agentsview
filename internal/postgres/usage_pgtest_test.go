@@ -286,7 +286,7 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	}
 	defer ps.Close()
 
-	if _, err := ps.Push(context.Background(), false); err != nil {
+	if _, err := ps.Push(context.Background(), false, nil); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
@@ -341,7 +341,7 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	}
 	defer ps.Close()
 
-	if _, err := ps.Push(context.Background(), false); err != nil {
+	if _, err := ps.Push(context.Background(), false, nil); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 
