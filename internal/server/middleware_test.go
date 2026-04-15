@@ -276,7 +276,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			handler := cspMiddleware(tt.host, tt.port, tt.publicOrigins, tt.bindAllIPs, inner)
+			handler := cspMiddleware(tt.host, tt.port, tt.publicOrigins, tt.bindAllIPs, "", inner)
 
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()

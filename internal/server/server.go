@@ -382,7 +382,7 @@ func (s *Server) Handler() http.Handler {
 	if bindAll {
 		bindAllIPs = localInterfaceIPs()
 	}
-	h := cspMiddleware(s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins, bindAllIPs,
+	h := cspMiddleware(s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins, bindAllIPs, s.basePath,
 		s.authMiddleware(
 			hostCheckMiddleware(
 				allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
@@ -422,8 +422,8 @@ func (s *Server) Handler() http.Handler {
 // responses. The policy pins the exact host:port origin so that
 // even if Tauri's compile-time CSP uses a wildcard port, the
 // intersection narrows to the actual runtime port.
-func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, next http.Handler) http.Handler {
-	policy := buildCSPPolicy(host, port, publicOrigins, bindAllIPs)
+func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, basePath string, next http.Handler) http.Handler {
+	policy := buildCSPPolicy(host, port, publicOrigins, bindAllIPs, basePath)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Content-Security-Policy", policy)
@@ -443,7 +443,7 @@ func cspMiddleware(host string, port int, publicOrigins []string, bindAllIPs map
 // resolve 'self' to the Go server origin after navigating from
 // tauri://localhost. Public origins and LAN IPs are restricted
 // to connect-src only to limit the script execution surface.
-func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs map[string]bool) string {
+func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs map[string]bool, basePath string) string {
 	// serverOrigin is the pinned http origin for the configured
 	// host:port, used in all directives so resources load
 	// correctly regardless of how the webview resolves 'self'.
@@ -506,6 +506,11 @@ func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs ma
 	connectParts = append(connectParts, connectWS...)
 	connectSrc := strings.Join(connectParts, " ")
 
+	baseURI := "'none'"
+	if basePath != "" {
+		baseURI = "'self'"
+	}
+
 	return fmt.Sprintf(
 		"default-src %[1]s; "+
 			"script-src %[1]s; "+
@@ -514,9 +519,9 @@ func buildCSPPolicy(host string, port int, publicOrigins []string, bindAllIPs ma
 			"style-src %[1]s 'unsafe-inline' https://fonts.googleapis.com; "+
 			"font-src %[1]s data: https://fonts.gstatic.com; "+
 			"object-src 'none'; "+
-			"base-uri 'none'; "+
+			"base-uri %[3]s; "+
 			"frame-ancestors 'none'",
-		resourceSrc, connectSrc,
+		resourceSrc, connectSrc, baseURI,
 	)
 }
 
