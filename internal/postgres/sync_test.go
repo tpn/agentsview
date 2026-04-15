@@ -210,7 +210,7 @@ func TestPushSingleSession(t *testing.T) {
 		t.Fatalf("insert messages: %v", err)
 	}
 
-	result, err := ps.Push(ctx, false)
+	result, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestPushIdempotent(t *testing.T) {
 		t.Fatalf("upsert session: %v", err)
 	}
 
-	result1, err := ps.Push(ctx, false)
+	result1, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("first push: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestPushIdempotent(t *testing.T) {
 		)
 	}
 
-	result2, err := ps.Push(ctx, false)
+	result2, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("second push: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestPushWithToolCalls(t *testing.T) {
 		t.Fatalf("insert messages: %v", err)
 	}
 
-	result, err := ps.Push(ctx, false)
+	result, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestPushWithToolResultEvents(t *testing.T) {
 		t.Fatalf("insert messages: %v", err)
 	}
 
-	if _, err := ps.Push(ctx, false); err != nil {
+	if _, err := ps.Push(ctx, false, nil); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 
@@ -636,7 +636,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 		t.Fatalf("upsert session: %v", err)
 	}
 
-	if _, err := ps.Push(ctx, false); err != nil {
+	if _, err := ps.Push(ctx, false, nil); err != nil {
 		t.Fatalf("push: %v", err)
 	}
 
@@ -711,7 +711,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 		t.Fatalf("replace messages: %v", err)
 	}
 
-	if _, err := ps.Push(ctx, false); err != nil {
+	if _, err := ps.Push(ctx, false, nil); err != nil {
 		t.Fatalf("initial push: %v", err)
 	}
 
@@ -725,7 +725,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 
 	time.Sleep(50 * time.Millisecond)
 
-	result, err := ps.Push(ctx, true)
+	result, err := ps.Push(ctx, true, nil)
 	if err != nil {
 		t.Fatalf("full push: %v", err)
 	}
@@ -798,7 +798,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 		t.Fatalf("insert messages: %v", err)
 	}
 
-	if _, err := ps.Push(ctx, false); err != nil {
+	if _, err := ps.Push(ctx, false, nil); err != nil {
 		t.Fatalf("first push: %v", err)
 	}
 
@@ -808,7 +808,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 		t.Fatalf("resetting watermark: %v", err)
 	}
 
-	result, err := ps.Push(ctx, true)
+	result, err := ps.Push(ctx, true, nil)
 	if err != nil {
 		t.Fatalf("full push: %v", err)
 	}
@@ -870,7 +870,7 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 		t.Fatalf("insert message: %v", err)
 	}
 
-	r1, err := ps.Push(ctx, false)
+	r1, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("initial push: %v", err)
 	}
@@ -888,7 +888,7 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	// An incremental push should detect the mismatch
 	// (local watermark set, PG has 0 sessions), recreate
 	// the schema, and automatically force a full push.
-	r2, err := ps.Push(ctx, false)
+	r2, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("post-reset push: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 		t.Fatalf("upsert session: %v", err)
 	}
 
-	r1, err := ps.Push(ctx, false)
+	r1, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("initial push: %v", err)
 	}
@@ -952,7 +952,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 
 	// A full push should recreate the schema even though
 	// schemaDone is memoized from the first push.
-	r2, err := ps.Push(ctx, true)
+	r2, err := ps.Push(ctx, true, nil)
 	if err != nil {
 		t.Fatalf("full push after drop: %v", err)
 	}
@@ -1021,7 +1021,7 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 		}
 	}
 
-	result, err := ps.Push(ctx, false)
+	result, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -1132,7 +1132,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 		t.Fatalf("insert messages: %v", err)
 	}
 
-	result, err := ps.Push(ctx, false)
+	result, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -1301,7 +1301,7 @@ func TestPushFilteredByProject(t *testing.T) {
 	if err := filtered.EnsureSchema(ctx); err != nil {
 		t.Fatalf("ensure schema: %v", err)
 	}
-	r1, err := filtered.Push(ctx, false)
+	r1, err := filtered.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("filtered push: %v", err)
 	}
@@ -1347,7 +1347,7 @@ func TestPushFilteredByProject(t *testing.T) {
 	}
 	defer unfiltered.Close()
 
-	r2, err := unfiltered.Push(ctx, false)
+	r2, err := unfiltered.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("unfiltered push: %v", err)
 	}
@@ -1367,7 +1367,7 @@ func TestPushFilteredByProject(t *testing.T) {
 
 	// Step 3: second filtered push is a no-op (fingerprints
 	// match).
-	r3, err := filtered.Push(ctx, false)
+	r3, err := filtered.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("second filtered push: %v", err)
 	}
@@ -1426,7 +1426,7 @@ func TestPushExcludeProject(t *testing.T) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		t.Fatalf("ensure schema: %v", err)
 	}
-	r, err := ps.Push(ctx, false)
+	r, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("push: %v", err)
 	}
@@ -1485,7 +1485,7 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 	}
 
 	// First push with --full.
-	r1, err := ps.Push(ctx, true)
+	r1, err := ps.Push(ctx, true, nil)
 	if err != nil {
 		t.Fatalf("first push: %v", err)
 	}
@@ -1517,7 +1517,7 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 
 	// Second push (not --full) should be a no-op because
 	// fingerprints were persisted after the filtered --full.
-	r2, err := ps.Push(ctx, false)
+	r2, err := ps.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("second push: %v", err)
 	}

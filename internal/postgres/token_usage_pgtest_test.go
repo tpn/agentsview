@@ -150,7 +150,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 		t.Fatalf("InsertMessages: %v", err)
 	}
 
-	if _, err := ps.Push(ctx, false); err != nil {
+	if _, err := ps.Push(ctx, false, nil); err != nil {
 		t.Fatalf("Push: %v", err)
 	}
 

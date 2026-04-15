@@ -89,7 +89,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	}
 
 	// First push.
-	_, err = sync.Push(ctx, false)
+	_, err = sync.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("Push (first): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	}
 
 	// Second push — must NOT skip due to fingerprint match.
-	_, err = sync.Push(ctx, false)
+	_, err = sync.Push(ctx, false, nil)
 	if err != nil {
 		t.Fatalf("Push (second): %v", err)
 	}

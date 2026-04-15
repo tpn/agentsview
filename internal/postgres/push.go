@@ -36,33 +36,20 @@ type PushResult struct {
 	Duration       time.Duration
 }
 
+// PushProgress is reported after each batch during Push.
+type PushProgress struct {
+	SessionsDone  int
+	SessionsTotal int
+	MessagesDone  int
+	Errors        int
+}
+
 // Push syncs local sessions and messages to PostgreSQL.
-// Only sessions modified since the last push are processed.
-// When full is true, the per-message content heuristic is
-// bypassed and every candidate session's messages are
-// re-pushed unconditionally.
-//
-// When project filters are set (via SyncOptions), only
-// matching sessions are pushed. Filtered pushes do not
-// advance the global watermark (last_push_at) because the
-// watermark covers all projects — advancing it would cause
-// unfiltered sessions to be skipped. Instead, filtered
-// pushes rely on fingerprints for incrementality: each run
-// re-queries all sessions since the last unfiltered push
-// and skips those whose fingerprint hasn't changed. The
-// query window grows between unfiltered pushes, but
-// fingerprint matching keeps the actual PG writes minimal.
-// Run an occasional unfiltered push (or use --all-projects)
-// to advance the watermark and bound the query window.
-//
-// Known limitation: sessions that are permanently deleted
-// from SQLite (via prune) are not propagated as deletions
-// to PG because the local rows no longer exist at push time.
-// Sessions soft-deleted with deleted_at are synced correctly.
-// Use a direct PG DELETE to remove permanently pruned
-// sessions from PG if needed.
+// The onProgress callback, if non-nil, is called after each
+// batch with current totals.
 func (s *Sync) Push(
 	ctx context.Context, full bool,
+	onProgress func(PushProgress),
 ) (PushResult, error) {
 	start := time.Now()
 	var result PushResult
@@ -271,24 +258,32 @@ func (s *Sync) Push(
 		if batchResult.ok {
 			result.SessionsPushed += batchResult.sessions
 			result.MessagesPushed += batchResult.messages
-			continue
+		} else {
+			// Batch failed — retry each session individually
+			// so one bad session doesn't block the rest.
+			for _, sess := range batch {
+				sr, retryErr := s.pushBatch(
+					ctx, []db.Session{sess},
+					full, &pushed,
+				)
+				if retryErr != nil {
+					return result, retryErr
+				}
+				if sr.ok {
+					result.SessionsPushed += sr.sessions
+					result.MessagesPushed += sr.messages
+				} else {
+					result.Errors++
+				}
+			}
 		}
-		// Batch failed — retry each session individually
-		// so one bad session doesn't block the rest.
-		for _, sess := range batch {
-			sr, retryErr := s.pushBatch(
-				ctx, []db.Session{sess},
-				full, &pushed,
-			)
-			if retryErr != nil {
-				return result, retryErr
-			}
-			if sr.ok {
-				result.SessionsPushed += sr.sessions
-				result.MessagesPushed += sr.messages
-			} else {
-				result.Errors++
-			}
+		if onProgress != nil {
+			onProgress(PushProgress{
+				SessionsDone:  end,
+				SessionsTotal: len(sessions),
+				MessagesDone:  result.MessagesPushed,
+				Errors:        result.Errors,
+			})
 		}
 	}
 

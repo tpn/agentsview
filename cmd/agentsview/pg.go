@@ -122,7 +122,16 @@ func runPGPush(cfg PGPushConfig) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		fatal("pg push schema: %v", err)
 	}
-	result, err := ps.Push(ctx, forceFull)
+	result, err := ps.Push(ctx, forceFull,
+		func(p postgres.PushProgress) {
+			fmt.Printf(
+				"\rPushing... %d/%d sessions, %d messages",
+				p.SessionsDone, p.SessionsTotal,
+				p.MessagesDone,
+			)
+		},
+	)
+	fmt.Print("\r\033[K") // clear progress line
 	if err != nil {
 		fatal("pg push: %v", err)
 	}
