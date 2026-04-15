@@ -162,3 +162,5 @@ container (see `.github/workflows/ci.yml`, `integration` job).
 - Use conventional commit messages
 - Run tests before committing when applicable
 - Never push or pull unless explicitly asked
+- **PR descriptions**: summary only, no test plans or checklists. Describe what
+  the code does now, not how to test it.

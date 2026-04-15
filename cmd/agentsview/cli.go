@@ -94,22 +94,43 @@ func newServeCommand() *cobra.Command {
 }
 
 func newSyncCommand() *cobra.Command {
-	var full bool
+	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:          "sync",
 		Short:        "Sync session data without serving",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		PreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cfg.Host == "" {
+				if cmd.Flags().Changed("user") ||
+					cmd.Flags().Changed("port") {
+					return fmt.Errorf(
+						"--user and --port require --host",
+					)
+				}
+			}
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
-			runSync(SyncConfig{Full: full})
+			runSync(cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
-		&full,
-		"full",
-		false,
+		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
+	)
+	cmd.Flags().StringVar(
+		&cfg.Host, "host", "",
+		"SSH hostname for remote sync",
+	)
+	cmd.Flags().StringVar(
+		&cfg.User, "user", "",
+		"SSH user for remote sync",
+	)
+	cmd.Flags().IntVar(
+		&cfg.Port, "port", 0,
+		"SSH port for remote sync (default: 22)",
 	)
 	return cmd
 }

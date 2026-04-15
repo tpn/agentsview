@@ -336,20 +336,35 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 	return AgentDef{}, false
 }
 
+// StripHostPrefix splits a remote session ID into its host
+// and raw ID parts. Remote IDs use the form "host~rawID"
+// where the "~" separator avoids conflict with both agent
+// prefixes (":") and URL path segments ("/"). For local
+// session IDs (no "~" present), host is empty and rawID is
+// the original ID.
+func StripHostPrefix(id string) (host, rawID string) {
+	if before, after, ok := strings.Cut(id, "~"); ok {
+		return before, after
+	}
+	return "", id
+}
+
 // AgentByPrefix returns the AgentDef whose IDPrefix matches
 // the session ID. For Claude (empty prefix), the match
 // succeeds only when no other prefix matches and the ID
-// does not contain a colon.
+// does not contain a colon. Host prefixes ("host~...") are
+// stripped before matching.
 func AgentByPrefix(sessionID string) (AgentDef, bool) {
+	_, rawID := StripHostPrefix(sessionID)
 	for _, def := range Registry {
 		if def.IDPrefix != "" &&
-			strings.HasPrefix(sessionID, def.IDPrefix) {
+			strings.HasPrefix(rawID, def.IDPrefix) {
 			return def, true
 		}
 	}
 	// No prefixed agent matched. Fall back to Claude only
-	// if the ID has no colon (unprefixed).
-	if !strings.Contains(sessionID, ":") {
+	// if the raw ID has no colon (unprefixed).
+	if !strings.Contains(rawID, ":") {
 		if def, ok := AgentByType(AgentClaude); ok {
 			return def, true
 		}

@@ -3,11 +3,41 @@
 package sync
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/wesm/agentsview/internal/db"
 )
+
+func openTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(
+		filepath.Join(t.TempDir(), "test.db"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+// fakeFileInfo implements os.FileInfo for test use.
+type fakeFileInfo struct {
+	size  int64
+	mtime int64 // UnixNano
+}
+
+func (f fakeFileInfo) Name() string      { return "test" }
+func (f fakeFileInfo) Size() int64       { return f.size }
+func (f fakeFileInfo) Mode() os.FileMode { return 0 }
+func (f fakeFileInfo) ModTime() time.Time {
+	return time.Unix(0, f.mtime)
+}
+func (f fakeFileInfo) IsDir() bool      { return false }
+func (f fakeFileInfo) Sys() any         { return nil }
 
 func TestFilterEmptyMessages(t *testing.T) {
 	tests := []struct {
@@ -633,6 +663,254 @@ func TestPairToolResultEventSummaries(t *testing.T) {
 				t.Fatalf("pairToolResultEventSummaries() mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestApplyRemoteRewrites(t *testing.T) {
+	tests := []struct {
+		name         string
+		prefix       string
+		rewriter     func(string) string
+		sess         db.Session
+		msgs         []db.Message
+		wantSessID   string
+		wantParent   *string
+		wantFilePath *string
+		wantMsgSess  string // expected SessionID on messages
+		wantSubs     []string
+		wantEvSubs   []string
+	}{
+		{
+			name:   "no prefix is no-op",
+			prefix: "",
+			sess: db.Session{
+				ID: "abc",
+			},
+			msgs: []db.Message{
+				{SessionID: "abc"},
+			},
+			wantSessID:  "abc",
+			wantMsgSess: "abc",
+		},
+		{
+			name:   "all fields prefixed",
+			prefix: "host~",
+			sess: db.Session{
+				ID:              "abc",
+				ParentSessionID: strPtr("parent-1"),
+				FilePath:        strPtr("/tmp/file"),
+			},
+			msgs: []db.Message{
+				{
+					SessionID: "abc",
+					ToolCalls: []db.ToolCall{
+						{
+							SessionID:         "abc",
+							SubagentSessionID: "sub-1",
+							ResultEvents: []db.ToolResultEvent{
+								{SubagentSessionID: "ev-1"},
+								{SubagentSessionID: ""},
+							},
+						},
+						{SessionID: "abc"},
+					},
+				},
+			},
+			wantSessID:  "host~abc",
+			wantParent:  strPtr("host~parent-1"),
+			wantFilePath: strPtr("/tmp/file"),
+			wantMsgSess: "host~abc",
+			wantSubs:    []string{"host~sub-1", ""},
+			wantEvSubs:  []string{"host~ev-1", ""},
+		},
+		{
+			name:   "path rewriter applied",
+			prefix: "box~",
+			rewriter: func(p string) string {
+				return "box:" + p
+			},
+			sess: db.Session{
+				ID:       "x",
+				FilePath: strPtr("/remote/path"),
+			},
+			msgs:         nil,
+			wantSessID:   "box~x",
+			wantFilePath: strPtr("box:/remote/path"),
+		},
+		{
+			name:   "nil parent stays nil",
+			prefix: "h~",
+			sess: db.Session{
+				ID: "z",
+			},
+			wantSessID: "h~z",
+			wantParent: nil,
+		},
+		{
+			name:   "empty parent stays empty",
+			prefix: "h~",
+			sess: db.Session{
+				ID:              "z",
+				ParentSessionID: strPtr(""),
+			},
+			wantSessID: "h~z",
+			wantParent: strPtr(""),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Engine{
+				idPrefix:     tt.prefix,
+				pathRewriter: tt.rewriter,
+			}
+			e.applyRemoteRewrites(&tt.sess, tt.msgs)
+
+			if tt.sess.ID != tt.wantSessID {
+				t.Errorf(
+					"ID = %q, want %q",
+					tt.sess.ID, tt.wantSessID,
+				)
+			}
+			if diff := cmp.Diff(
+				tt.wantParent, tt.sess.ParentSessionID,
+			); diff != "" {
+				t.Errorf("ParentSessionID %s", diff)
+			}
+			if tt.wantFilePath != nil {
+				if diff := cmp.Diff(
+					tt.wantFilePath, tt.sess.FilePath,
+				); diff != "" {
+					t.Errorf("FilePath %s", diff)
+				}
+			}
+			for _, m := range tt.msgs {
+				if m.SessionID != tt.wantMsgSess {
+					t.Errorf(
+						"msg SessionID = %q, want %q",
+						m.SessionID, tt.wantMsgSess,
+					)
+				}
+			}
+			var gotSubs, gotEvSubs []string
+			for _, m := range tt.msgs {
+				for _, tc := range m.ToolCalls {
+					gotSubs = append(
+						gotSubs, tc.SubagentSessionID,
+					)
+					for _, ev := range tc.ResultEvents {
+						gotEvSubs = append(
+							gotEvSubs,
+							ev.SubagentSessionID,
+						)
+					}
+				}
+			}
+			if diff := cmp.Diff(
+				tt.wantSubs, gotSubs,
+			); diff != "" {
+				t.Errorf("SubagentSessionIDs %s", diff)
+			}
+			if diff := cmp.Diff(
+				tt.wantEvSubs, gotEvSubs,
+			); diff != "" {
+				t.Errorf("ResultEvent SubagentSessionIDs %s", diff)
+			}
+		})
+	}
+}
+
+func TestShouldSkipFileWithIDPrefix(t *testing.T) {
+	database := openTestDB(t)
+
+	// Store a session with prefixed ID and file metadata.
+	sess := db.Session{
+		ID:       "host~abc-123",
+		Project:  "test",
+		Machine:  "host",
+		Agent:    "claude",
+		FilePath: strPtr("host:/remote/session.jsonl"),
+		FileSize: int64Ptr(1024),
+		FileMtime: int64Ptr(
+			int64(1700000000000000000),
+		),
+	}
+	if err := database.UpsertSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	// Engine with IDPrefix should find the session.
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+	}
+	got := e.shouldSkipFile(
+		"abc-123",
+		fakeFileInfo{size: 1024, mtime: 1700000000000000000},
+	)
+	if !got {
+		t.Error("shouldSkipFile should return true")
+	}
+
+	// Engine WITHOUT IDPrefix should NOT find it.
+	e2 := &Engine{db: database}
+	got2 := e2.shouldSkipFile(
+		"abc-123",
+		fakeFileInfo{size: 1024, mtime: 1700000000000000000},
+	)
+	if got2 {
+		t.Error(
+			"shouldSkipFile without prefix should return false",
+		)
+	}
+}
+
+func TestShouldSkipByPathWithRewriter(t *testing.T) {
+	database := openTestDB(t)
+
+	// Store a session with rewritten file path.
+	sess := db.Session{
+		ID:       "host~codex:abc",
+		Project:  "test",
+		Machine:  "host",
+		Agent:    "codex",
+		FilePath: strPtr("host:/remote/codex/abc.jsonl"),
+		FileSize: int64Ptr(2048),
+		FileMtime: int64Ptr(
+			int64(1700000000000000000),
+		),
+	}
+	if err := database.UpsertSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	rewriter := func(p string) string {
+		return "host:" + p
+	}
+
+	// Engine with PathRewriter should find the session.
+	e := &Engine{
+		db:           database,
+		pathRewriter: rewriter,
+	}
+	got := e.shouldSkipByPath(
+		"/remote/codex/abc.jsonl",
+		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
+	)
+	if !got {
+		t.Error("shouldSkipByPath should return true")
+	}
+
+	// Without rewriter, lookup misses.
+	e2 := &Engine{db: database}
+	got2 := e2.shouldSkipByPath(
+		"/remote/codex/abc.jsonl",
+		fakeFileInfo{size: 2048, mtime: 1700000000000000000},
+	)
+	if got2 {
+		t.Error(
+			"shouldSkipByPath without rewriter should " +
+				"return false",
+		)
 	}
 }
 

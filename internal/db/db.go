@@ -377,6 +377,19 @@ func (db *DB) migrateColumns() error {
 		return err
 	}
 
+	if _, err := w.Exec(`
+		CREATE TABLE IF NOT EXISTS remote_skipped_files (
+			host       TEXT NOT NULL,
+			path       TEXT NOT NULL,
+			file_mtime INTEGER NOT NULL,
+			PRIMARY KEY (host, path)
+		)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating remote_skipped_files: %w", err,
+		)
+	}
+
 	runRepair, err := db.shouldRunTokenCoverageRepairLocked(w)
 	if err != nil {
 		return err

@@ -44,6 +44,9 @@ __pycache__/
 .gomodcache/
 .gopath/
 
+# SSH test key (extracted from Docker container)
+testdata/ssh/test_key
+
 # Local data
 data/
 sessions/

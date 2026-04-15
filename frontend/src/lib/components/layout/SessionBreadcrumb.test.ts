@@ -225,4 +225,27 @@ describe("SessionBreadcrumb", () => {
 
     unmount(component);
   });
+
+  it("hides local-only actions for remote sessions", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          id: "devbox1~abc-123",
+          machine: "devbox1",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+
+    // The dropdown trigger (.resume-btn) should not appear
+    // for remote sessions (no resume, no copy-dir, no open-in).
+    const resumeBtn = document.querySelector(".resume-btn");
+    expect(resumeBtn).toBeNull();
+
+    unmount(component);
+  });
+
 });

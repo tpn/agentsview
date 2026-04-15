@@ -1,8 +1,7 @@
-# Docker Compose file for integration testing with PostgreSQL
+# Docker Compose file for integration testing
 # Usage:
-#   make postgres-up
-#   make test-postgres
-#   make postgres-down
+#   make postgres-up / make test-postgres / make postgres-down
+#   make ssh-up / make test-ssh / make ssh-down
 
 services:
   postgres:
@@ -20,3 +19,17 @@ services:
       retries: 10
     tmpfs:
       - /var/lib/postgresql/data  # Use tmpfs for faster tests, no persistence needed
+
+  sshd:
+    build:
+      context: .
+      dockerfile: testdata/ssh/Dockerfile
+    ports:
+      - "2222:22"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 22"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /tmp

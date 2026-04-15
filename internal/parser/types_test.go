@@ -397,6 +397,144 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 	}
 }
 
+func TestStripHostPrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		id       string
+		wantHost string
+		wantRaw  string
+	}{
+		{
+			"local claude id",
+			"abc-123-def",
+			"",
+			"abc-123-def",
+		},
+		{
+			"local codex id",
+			"codex:some-uuid",
+			"",
+			"codex:some-uuid",
+		},
+		{
+			"host-prefixed claude",
+			"devbox1~abc-123-def",
+			"devbox1",
+			"abc-123-def",
+		},
+		{
+			"host-prefixed codex",
+			"devbox1~codex:some-uuid",
+			"devbox1",
+			"codex:some-uuid",
+		},
+		{
+			"host-prefixed copilot",
+			"server2~copilot:sess-id",
+			"server2",
+			"copilot:sess-id",
+		},
+		{
+			"fqdn host",
+			"dev.example.com~abc-123",
+			"dev.example.com",
+			"abc-123",
+		},
+		{
+			"empty string",
+			"",
+			"",
+			"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, raw := StripHostPrefix(tt.id)
+			if host != tt.wantHost {
+				t.Errorf(
+					"StripHostPrefix(%q) host = %q, want %q",
+					tt.id, host, tt.wantHost,
+				)
+			}
+			if raw != tt.wantRaw {
+				t.Errorf(
+					"StripHostPrefix(%q) raw = %q, want %q",
+					tt.id, raw, tt.wantRaw,
+				)
+			}
+		})
+	}
+}
+
+func TestAgentByPrefixRemote(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		wantType  AgentType
+		wantOK    bool
+	}{
+		{
+			"remote claude",
+			"devbox1~abc-123",
+			AgentClaude,
+			true,
+		},
+		{
+			"remote codex",
+			"devbox1~codex:some-uuid",
+			AgentCodex,
+			true,
+		},
+		{
+			"remote copilot",
+			"server2~copilot:sess-id",
+			AgentCopilot,
+			true,
+		},
+		{
+			"remote gemini",
+			"myhost~gemini:sess-id",
+			AgentGemini,
+			true,
+		},
+		{
+			"fqdn host with claude",
+			"dev.example.com~abc-123",
+			AgentClaude,
+			true,
+		},
+		{
+			"fqdn host with codex",
+			"prod.example.com~codex:sess-id",
+			AgentCodex,
+			true,
+		},
+		{
+			"remote unknown agent",
+			"host1~future:sess-id",
+			"",
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, ok := AgentByPrefix(tt.sessionID)
+			if ok != tt.wantOK {
+				t.Fatalf(
+					"AgentByPrefix(%q) ok = %v, want %v",
+					tt.sessionID, ok, tt.wantOK,
+				)
+			}
+			if ok && def.Type != tt.wantType {
+				t.Errorf(
+					"AgentByPrefix(%q).Type = %q, want %q",
+					tt.sessionID, def.Type, tt.wantType,
+				)
+			}
+		})
+	}
+}
+
 func TestVSCodeCopilotDefaultDirs(t *testing.T) {
 	def, ok := AgentByType(AgentVSCodeCopilot)
 	if !ok {

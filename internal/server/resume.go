@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
+	"github.com/wesm/agentsview/internal/parser"
 )
 
 // resumeRequest is the JSON body for POST /api/v1/sessions/{id}/resume.
@@ -87,6 +88,16 @@ func (s *Server) handleResumeSession(
 	}
 	if session == nil || session.DeletedAt != nil {
 		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	// Remote sessions have host-prefixed IDs (host~rawID).
+	// They cannot be resumed locally.
+	if host, _ := parser.StripHostPrefix(id); host != "" {
+		writeError(
+			w, http.StatusBadRequest,
+			"cannot resume remote session",
+		)
 		return
 	}
 

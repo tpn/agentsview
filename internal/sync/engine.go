@@ -29,6 +29,18 @@ type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
 	Machine                 string
 	BlockedResultCategories []string
+	// IDPrefix is prepended to all session IDs. Used by
+	// remote sync to namespace IDs by host (e.g. "host~").
+	IDPrefix string
+	// PathRewriter transforms file paths before storage.
+	// Used by remote sync to replace temp paths with
+	// "host:/remote/path" references.
+	PathRewriter func(string) string
+	// Ephemeral disables sync-state persistence (timestamps
+	// and skip cache) so remote sync does not interfere with
+	// local sync watermarks or pollute the skipped_files table
+	// with temp-dir paths.
+	Ephemeral bool
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -48,6 +60,12 @@ type Engine struct {
 	// retried when its mtime changes.
 	skipMu    gosync.RWMutex
 	skipCache map[string]int64
+	// idPrefix and pathRewriter support remote sync:
+	// prefix all session IDs to avoid collisions, rewrite
+	// temp paths to "host:/remote/path" form.
+	ephemeral    bool
+	idPrefix     string
+	pathRewriter func(string) string
 }
 
 // codexExecMigrationKey is the pg_sync_state flag that
@@ -64,13 +82,14 @@ func NewEngine(
 	database *db.DB, cfg EngineConfig,
 ) *Engine {
 	skipCache := make(map[string]int64)
-	if loaded, err := database.LoadSkippedFiles(); err == nil {
-		skipCache = loaded
-	} else {
-		log.Printf("loading skip cache: %v", err)
+	if !cfg.Ephemeral {
+		if loaded, err := database.LoadSkippedFiles(); err == nil {
+			skipCache = loaded
+		} else {
+			log.Printf("loading skip cache: %v", err)
+		}
+		migrateLegacyCodexExecSkips(database, skipCache)
 	}
-
-	migrateLegacyCodexExecSkips(database, skipCache)
 
 	dirs := make(map[parser.AgentType][]string, len(cfg.AgentDirs))
 	for k, v := range cfg.AgentDirs {
@@ -83,6 +102,9 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		skipCache:               skipCache,
+		ephemeral:               cfg.Ephemeral,
+		idPrefix:                cfg.IDPrefix,
+		pathRewriter:            cfg.PathRewriter,
 	}
 }
 
@@ -1217,6 +1239,9 @@ func (e *Engine) syncAllLocked(
 // into pg_sync_state. Callers use this to compute mtime
 // cutoffs for future quick incremental syncs.
 func (e *Engine) recordSyncStarted() {
+	if e.ephemeral {
+		return
+	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := e.db.SetSyncState(syncStateStartedAt, ts); err != nil {
 		log.Printf("persist sync start time: %v", err)
@@ -1227,6 +1252,9 @@ func (e *Engine) recordSyncStarted() {
 // sync run. Only called on successful completion (not on
 // cancellation or abort).
 func (e *Engine) recordSyncFinished() {
+	if e.ephemeral {
+		return
+	}
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	if err := e.db.SetSyncState(syncStateFinishedAt, ts); err != nil {
 		log.Printf("persist sync finish time: %v", err)
@@ -1624,10 +1652,32 @@ func (e *Engine) clearSkip(path string) {
 	_ = e.db.DeleteSkippedFile(path)
 }
 
+// InjectSkipCache merges entries into the in-memory skip
+// cache. Used by remote sync to pre-populate with
+// translated paths.
+func (e *Engine) InjectSkipCache(entries map[string]int64) {
+	e.skipMu.Lock()
+	defer e.skipMu.Unlock()
+	maps.Copy(e.skipCache, entries)
+}
+
+// SnapshotSkipCache returns a copy of the in-memory skip
+// cache.
+func (e *Engine) SnapshotSkipCache() map[string]int64 {
+	e.skipMu.RLock()
+	defer e.skipMu.RUnlock()
+	out := make(map[string]int64, len(e.skipCache))
+	maps.Copy(out, e.skipCache)
+	return out
+}
+
 // persistSkipCache writes the in-memory skip cache to the
 // database so skipped files survive process restarts.
 // Returns the number of entries persisted.
 func (e *Engine) persistSkipCache() int {
+	if e.ephemeral {
+		return 0
+	}
 	e.skipMu.RLock()
 	snapshot := make(map[string]int64, len(e.skipCache))
 	maps.Copy(snapshot, e.skipCache)
@@ -1649,7 +1699,7 @@ func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {
 	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(
-		sessionID,
+		e.idPrefix + sessionID,
 	)
 	if !ok {
 		return false
@@ -1664,8 +1714,12 @@ func (e *Engine) shouldSkipFile(
 func (e *Engine) shouldSkipByPath(
 	path string, info os.FileInfo,
 ) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		path,
+		lookupPath,
 	)
 	if !ok {
 		return false
@@ -1673,6 +1727,23 @@ func (e *Engine) shouldSkipByPath(
 	return storedSize == info.Size() &&
 		storedMtime == info.ModTime().UnixNano()
 }
+
+// fakeSnapshotInfo wraps a pre-computed size and mtime
+// (nanoseconds) as os.FileInfo so that shouldSkipByPath can
+// be reused for OpenHands snapshot-based skip detection.
+type fakeSnapshotInfo struct {
+	fSize  int64
+	fMtime int64
+}
+
+func (f fakeSnapshotInfo) Name() string      { return "" }
+func (f fakeSnapshotInfo) Size() int64       { return f.fSize }
+func (f fakeSnapshotInfo) Mode() os.FileMode { return 0 }
+func (f fakeSnapshotInfo) ModTime() time.Time {
+	return time.Unix(0, f.fMtime)
+}
+func (f fakeSnapshotInfo) IsDir() bool { return false }
+func (f fakeSnapshotInfo) Sys() any    { return nil }
 
 func (e *Engine) processClaude(
 	file parser.DiscoveredFile, info os.FileInfo,
@@ -1682,7 +1753,7 @@ func (e *Engine) processClaude(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), sessionID,
+			context.Background(), e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -1754,7 +1825,11 @@ func (e *Engine) tryIncrementalJSONL(
 	agent parser.AgentType,
 	parseFn incrementalParseFunc,
 ) (processResult, bool) {
-	inc, ok := e.db.GetSessionForIncremental(file.Path)
+	lookupPath := file.Path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(file.Path)
+	}
+	inc, ok := e.db.GetSessionForIncremental(lookupPath)
 	if !ok || inc.FileSize <= 0 {
 		return processResult{}, false
 	}
@@ -2257,12 +2332,10 @@ func (e *Engine) processOpenHands(
 		return processResult{err: err}
 	}
 
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
-		file.Path,
-	)
-	if ok &&
-		storedSize == snapshot.Size &&
-		storedMtime == snapshot.Mtime {
+	fi := fakeSnapshotInfo{
+		fSize: snapshot.Size, fMtime: snapshot.Mtime,
+	}
+	if e.shouldSkipByPath(file.Path, fi) {
 		return processResult{skip: true}
 	}
 
@@ -2403,7 +2476,7 @@ func (e *Engine) processIflow(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), sessionID,
+			context.Background(), e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -2455,6 +2528,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		s := toDBSession(pw)
 		s.MessageCount, s.UserMessageCount =
 			postFilterCounts(msgs)
+		e.applyRemoteRewrites(&s, msgs)
 
 		// UpsertSession first: the session row must exist
 		// before messages can be inserted (FK constraint).
@@ -2478,7 +2552,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 
 		if err := e.writeMessages(
-			pw.sess.ID, msgs,
+			s.ID, msgs,
 		); err != nil {
 			log.Printf("%v", err)
 			continue
@@ -2597,6 +2671,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s := toDBSession(pw)
 	s.MessageCount, s.UserMessageCount =
 		postFilterCounts(msgs)
+	e.applyRemoteRewrites(&s, msgs)
 	if err := e.db.UpsertSession(s); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			if pw.sess.File.Path != "" {
@@ -2608,15 +2683,51 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		return err
 	}
 	if err := e.db.ReplaceSessionMessages(
-		pw.sess.ID, msgs,
+		s.ID, msgs,
 	); err != nil {
 		log.Printf(
 			"replace messages for %s: %v",
-			pw.sess.ID, err,
+			s.ID, err,
 		)
 		return err
 	}
 	return nil
+}
+
+// applyRemoteRewrites prefixes session IDs and rewrites
+// file paths for remote sync. No-op when idPrefix is empty.
+func (e *Engine) applyRemoteRewrites(
+	s *db.Session, msgs []db.Message,
+) {
+	if e.idPrefix == "" {
+		return
+	}
+	s.ID = e.idPrefix + s.ID
+	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
+		p := e.idPrefix + *s.ParentSessionID
+		s.ParentSessionID = &p
+	}
+	if e.pathRewriter != nil && s.FilePath != nil {
+		fp := e.pathRewriter(*s.FilePath)
+		s.FilePath = &fp
+	}
+	for i := range msgs {
+		msgs[i].SessionID = s.ID
+		for j := range msgs[i].ToolCalls {
+			msgs[i].ToolCalls[j].SessionID = s.ID
+			if msgs[i].ToolCalls[j].SubagentSessionID != "" {
+				msgs[i].ToolCalls[j].SubagentSessionID =
+					e.idPrefix + msgs[i].ToolCalls[j].SubagentSessionID
+			}
+			for k := range msgs[i].ToolCalls[j].ResultEvents {
+				re := &msgs[i].ToolCalls[j].ResultEvents[k]
+				if re.SubagentSessionID != "" {
+					re.SubagentSessionID =
+						e.idPrefix + re.SubagentSessionID
+				}
+			}
+		}
+	}
 }
 
 // toDBSession converts a pendingWrite to a db.Session.
@@ -2723,6 +2834,12 @@ func countMessages(batch []pendingWrite) int {
 // ID, e.g. Zencoder header ID vs filename), then falls back
 // to agent-specific path reconstruction.
 func (e *Engine) FindSourceFile(sessionID string) string {
+	host, rawID := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		// Remote sessions have no local source file.
+		return ""
+	}
+
 	def, ok := parser.AgentByPrefix(sessionID)
 	if !ok || !def.FileBased || def.FindSourceFunc == nil {
 		return ""
@@ -2736,9 +2853,9 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
-	rawID := strings.TrimPrefix(sessionID, def.IDPrefix)
+	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
 	for _, d := range e.agentDirs[def.Type] {
-		if f := def.FindSourceFunc(d, rawID); f != "" {
+		if f := def.FindSourceFunc(d, bareID); f != "" {
 			return f
 		}
 	}
@@ -2750,6 +2867,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 func (e *Engine) SyncSingleSession(sessionID string) error {
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
+
+	host, _ := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		return fmt.Errorf(
+			"cannot sync remote session %s locally", sessionID,
+		)
+	}
 
 	def, ok := parser.AgentByPrefix(sessionID)
 	if !ok {

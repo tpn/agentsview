@@ -218,6 +218,15 @@ CREATE TABLE IF NOT EXISTS skipped_files (
     file_mtime INTEGER NOT NULL
 );
 
+-- Remote skip cache: tracks file mtimes per remote host
+-- for SSH sync incremental optimization.
+CREATE TABLE IF NOT EXISTS remote_skipped_files (
+    host       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    file_mtime INTEGER NOT NULL,
+    PRIMARY KEY (host, path)
+);
+
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,
